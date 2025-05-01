@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">System Settings</h5>
+            </div>
+            <div class="card-body">
+                <form id="settingsForm">
+                    <!-- Camera Schedule -->
+                    <div class="mb-4">
+                        <h6>Camera Schedule</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="cameraStartTime" class="form-label">Start Time</label>
+                                    <input type="time" class="form-control" id="cameraStartTime" name="camera_start_time">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="cameraEndTime" class="form-label">End Time</label>
+                                    <input type="time" class="form-control" id="cameraEndTime" name="camera_end_time">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Detection Settings -->
+                    <div class="mb-4">
+                        <h6>Detection Settings</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="confidenceThreshold" class="form-label">Confidence Threshold</label>
+                                    <input type="range" class="form-range" id="confidenceThreshold" name="confidence_threshold" min="0" max="100" step="1">
+                                    <div class="text-center" id="confidenceValue">50%</div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="blurFaces" name="blur_faces">
+                                        <label class="form-check-label" for="blurFaces">Blur Faces in Images</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Notification Settings -->
+                    <div class="mb-4">
+                        <h6>Notification Settings</h6>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="emailEnabled" name="notifications[email]">
+                                        <label class="form-check-label" for="emailEnabled">Email Notifications</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="smsEnabled" name="notifications[sms]">
+                                        <label class="form-check-label" for="smsEnabled">SMS Notifications</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="telegramEnabled" name="notifications[telegram]">
+                                        <label class="form-check-label" for="telegramEnabled">Telegram Notifications</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="text-end">
+                        <button type="submit" class="btn btn-primary">Save Settings</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Function to load settings
+async function loadSettings() {
+    try {
+        const response = await fetch('/api/settings');
+        const settings = await response.json();
+        
+        // Update form fields
+        document.getElementById('cameraStartTime').value = settings.camera_start_time;
+        document.getElementById('cameraEndTime').value = settings.camera_end_time;
+        document.getElementById('confidenceThreshold').value = settings.confidence_threshold * 100;
+        document.getElementById('confidenceValue').textContent = `${(settings.confidence_threshold * 100).toFixed(0)}%`;
+        document.getElementById('blurFaces').checked = settings.blur_faces;
+        document.getElementById('emailEnabled').checked = settings.notifications.email;
+        document.getElementById('smsEnabled').checked = settings.notifications.sms;
+        document.getElementById('telegramEnabled').checked = settings.notifications.telegram;
+    } catch (error) {
+        console.error('Error loading settings:', error);
+    }
+}
+
+// Function to update confidence value display
+document.getElementById('confidenceThreshold').addEventListener('input', (e) => {
+    document.getElementById('confidenceValue').textContent = `${e.target.value}%`;
+});
+
+// Function to handle form submission
+document.getElementById('settingsForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const formData = {
+        camera_start_time: document.getElementById('cameraStartTime').value,
+        camera_end_time: document.getElementById('cameraEndTime').value,
+        confidence_threshold: parseInt(document.getElementById('confidenceThreshold').value) / 100,
+        blur_faces: document.getElementById('blurFaces').checked,
+        notifications: {
+            email: document.getElementById('emailEnabled').checked,
+            sms: document.getElementById('smsEnabled').checked,
+            telegram: document.getElementById('telegramEnabled').checked
+        }
+    };
+
+    try {
+        const response = await fetch('/api/settings', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(formData)
+        });
+
+        if (response.ok) {
+            alert('Settings saved successfully');
+        } else {
+            alert('Error saving settings');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('An error occurred while saving settings');
+    }
+});
+
+// Load settings when page loads
+document.addEventListener('DOMContentLoaded', loadSettings);
+</script>
+{% endblock %} 
