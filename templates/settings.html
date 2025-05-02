@@ -57,7 +57,7 @@
                             <div class="col-md-4">
                                 <div class="mb-3">
                                     <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="emailEnabled" name="notifications[email]">
+                                        <input class="form-check-input" type="checkbox" id="emailEnabled" name="email_enabled">
                                         <label class="form-check-label" for="emailEnabled">Email Notifications</label>
                                     </div>
                                 </div>
@@ -65,7 +65,7 @@
                             <div class="col-md-4">
                                 <div class="mb-3">
                                     <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="smsEnabled" name="notifications[sms]">
+                                        <input class="form-check-input" type="checkbox" id="smsEnabled" name="sms_enabled">
                                         <label class="form-check-label" for="smsEnabled">SMS Notifications</label>
                                     </div>
                                 </div>
@@ -73,7 +73,7 @@
                             <div class="col-md-4">
                                 <div class="mb-3">
                                     <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="telegramEnabled" name="notifications[telegram]">
+                                        <input class="form-check-input" type="checkbox" id="telegramEnabled" name="telegram_enabled">
                                         <label class="form-check-label" for="telegramEnabled">Telegram Notifications</label>
                                     </div>
                                 </div>
@@ -100,16 +100,17 @@ async function loadSettings() {
         const settings = await response.json();
         
         // Update form fields
-        document.getElementById('cameraStartTime').value = settings.camera_start_time;
-        document.getElementById('cameraEndTime').value = settings.camera_end_time;
-        document.getElementById('confidenceThreshold').value = settings.confidence_threshold * 100;
-        document.getElementById('confidenceValue').textContent = `${(settings.confidence_threshold * 100).toFixed(0)}%`;
-        document.getElementById('blurFaces').checked = settings.blur_faces;
+        document.getElementById('cameraStartTime').value = settings.camera.start_time;
+        document.getElementById('cameraEndTime').value = settings.camera.end_time;
+        document.getElementById('confidenceThreshold').value = settings.camera.confidence_threshold * 100;
+        document.getElementById('confidenceValue').textContent = `${(settings.camera.confidence_threshold * 100).toFixed(0)}%`;
+        document.getElementById('blurFaces').checked = settings.camera.blur_faces;
         document.getElementById('emailEnabled').checked = settings.notifications.email;
         document.getElementById('smsEnabled').checked = settings.notifications.sms;
         document.getElementById('telegramEnabled').checked = settings.notifications.telegram;
     } catch (error) {
         console.error('Error loading settings:', error);
+        alert('Error loading settings');
     }
 }
 
@@ -127,11 +128,9 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
         camera_end_time: document.getElementById('cameraEndTime').value,
         confidence_threshold: parseInt(document.getElementById('confidenceThreshold').value) / 100,
         blur_faces: document.getElementById('blurFaces').checked,
-        notifications: {
-            email: document.getElementById('emailEnabled').checked,
-            sms: document.getElementById('smsEnabled').checked,
-            telegram: document.getElementById('telegramEnabled').checked
-        }
+        email_enabled: document.getElementById('emailEnabled').checked,
+        sms_enabled: document.getElementById('smsEnabled').checked,
+        telegram_enabled: document.getElementById('telegramEnabled').checked
     };
 
     try {
@@ -146,7 +145,8 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
         if (response.ok) {
             alert('Settings saved successfully');
         } else {
-            alert('Error saving settings');
+            const errorData = await response.json();
+            alert('Error saving settings: ' + (errorData.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Error:', error);

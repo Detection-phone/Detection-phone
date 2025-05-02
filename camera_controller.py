@@ -320,36 +320,101 @@ class CameraController:
     def _handle_detection(self, frame, confidence):
         try:
             print("\nHandling phone detection...")
+            
+            # Get absolute path for detections directory
+            detections_dir = os.path.abspath('detections')
+            print(f"Detections directory path: {detections_dir}")
+            
+            # Check if we can write to the directory
+            if not os.access(detections_dir, os.W_OK):
+                print(f"ERROR: No write permission for directory: {detections_dir}")
+                return
+            
             # Save detection image
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"detections/{timestamp}.jpg"
-            os.makedirs('detections', exist_ok=True)
+            filename = os.path.join(detections_dir, f"{timestamp}.jpg")
+            print(f"Attempting to save image to: {filename}")
+            
+            # Ensure detections directory exists
+            try:
+                os.makedirs(detections_dir, exist_ok=True)
+                print(f"Ensured detections directory exists at: {detections_dir}")
+            except Exception as e:
+                print(f"Error creating detections directory: {e}")
+                return
             
             # Draw bounding box on frame before saving
-            results = self.model(frame, verbose=False)
-            for result in results:
-                boxes = result.boxes
-                for box in boxes:
-                    if int(box.cls[0]) == self.phone_class_id:
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        cv2.putText(frame, f"Phone: {confidence:.2f}", (x1, y1 - 10),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            try:
+                results = self.model(frame, verbose=False)
+                for result in results:
+                    boxes = result.boxes
+                    for box in boxes:
+                        if int(box.cls[0]) == self.phone_class_id:
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            cv2.putText(frame, f"Phone: {confidence:.2f}", (x1, y1 - 10),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            except Exception as e:
+                print(f"Error drawing bounding box: {e}")
             
-            cv2.imwrite(filename, frame)
-            print(f"Saved detection image: {filename}")
+            # Save the image
+            try:
+                # Check if frame is valid
+                if frame is None or frame.size == 0:
+                    print("ERROR: Invalid frame data")
+                    return
+                
+                # Try to save with different quality settings
+                for quality in [95, 90, 85]:
+                    try:
+                        success = cv2.imwrite(filename, frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+                        if success:
+                            print(f"Successfully saved detection image with quality {quality}: {filename}")
+                            break
+                    except Exception as e:
+                        print(f"Error saving with quality {quality}: {e}")
+                        continue
+                else:
+                    print("Failed to save image with any quality setting")
+                    return
+                
+                # Verify the file was created
+                if not os.path.exists(filename):
+                    print(f"ERROR: File was not created: {filename}")
+                    return
+                
+                # Check file size
+                file_size = os.path.getsize(filename)
+                print(f"Saved file size: {file_size} bytes")
+                if file_size == 0:
+                    print("ERROR: Saved file is empty")
+                    os.remove(filename)
+                    return
+                
+            except Exception as e:
+                print(f"Error saving detection image: {e}")
+                return
 
             # Create detection record
-            with current_app.app_context():
-                detection = Detection(
-                    location='Camera 1',
-                    confidence=confidence,
-                    image_path=filename,
-                    status='Pending'
-                )
-                db.session.add(detection)
-                db.session.commit()
-                print(f"Created detection record with ID: {detection.id}")
+            try:
+                with current_app.app_context():
+                    detection = Detection(
+                        location='Camera 1',
+                        confidence=confidence,
+                        image_path=filename,
+                        status='Pending'
+                    )
+                    db.session.add(detection)
+                    db.session.commit()
+                    print(f"Successfully created detection record with ID: {detection.id}")
+            except Exception as e:
+                print(f"Error creating detection record: {e}")
+                # Try to delete the saved image if database operation failed
+                try:
+                    os.remove(filename)
+                    print(f"Deleted image {filename} due to database error")
+                except:
+                    pass
         except Exception as e:
             print(f"Error handling detection: {e}")
 
