@@ -10,10 +10,15 @@ from ultralytics import YOLO
 import json
 import torch
 from models import db, User, Detection
-from camera_controller import camera_controller
+from camera_controller import CameraController
+import logging
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
@@ -29,11 +34,16 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
+# Initialize camera controller
+camera_controller = CameraController()
+logger.info("Camera controller initialized")
+
 # Initialize YOLO model
 try:
     model = YOLO('yolov8n.pt')
+    logger.info("YOLO model loaded successfully")
 except Exception as e:
-    print(f"Error loading YOLO model: {e}")
+    logger.error(f"Error loading YOLO model: {e}")
     model = None
 
 @login_manager.user_loader
@@ -73,6 +83,7 @@ def login():
     if user and user.password == password:  # In production, use proper password hashing
         login_user(user)
         return jsonify({'message': 'Login successful'})
+    
     return jsonify({'message': 'Invalid credentials'}), 401
 
 @app.route('/api/logout')
@@ -167,16 +178,35 @@ def get_settings():
 @login_required
 def update_settings():
     data = request.get_json()
+    print("\nReceived settings update request")
+    print(f"Data: {data}")
     
-    # Update camera controller settings
-    camera_controller.update_settings({
-        'camera_start_time': data['camera_start_time'],
-        'camera_end_time': data['camera_end_time'],
-        'blur_faces': data['blur_faces'],
-        'confidence_threshold': data['confidence_threshold']
-    })
-    
-    return jsonify({'message': 'Settings updated successfully'})
+    try:
+        # Update camera controller settings
+        camera_settings = {
+            'camera_start_time': data['camera_start_time'],
+            'camera_end_time': data['camera_end_time'],
+            'blur_faces': data['blur_faces'],
+            'confidence_threshold': data['confidence_threshold']
+        }
+        
+        print(f"Updating camera controller with settings: {camera_settings}")
+        camera_controller.update_settings(camera_settings)
+        
+        # Check current camera status
+        print(f"Camera running: {camera_controller.is_running}")
+        print(f"Within schedule: {camera_controller._is_within_schedule()}")
+        
+        return jsonify({
+            'message': 'Settings updated successfully',
+            'camera_status': {
+                'is_running': camera_controller.is_running,
+                'within_schedule': camera_controller._is_within_schedule()
+            }
+        })
+    except Exception as e:
+        print(f"Error updating settings: {e}")
+        return jsonify({'error': str(e)}), 500
 
 # Serve detection images
 @app.route('/detections/<path:filename>')
