@@ -15,4 +15,5 @@ class Detection(db.Model):
     location = db.Column(db.String(100))
     confidence = db.Column(db.Float)
     image_path = db.Column(db.String(200))
-    status = db.Column(db.String(20)) 
+    status = db.Column(db.String(20))
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True) 

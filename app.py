@@ -12,6 +12,7 @@ import torch
 from models import db, User, Detection
 from camera_controller import CameraController
 import logging
+from flask_migrate import Migrate
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +31,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize extensions
 db.init_app(app)
+migrate = Migrate(app, db)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'

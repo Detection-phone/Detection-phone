@@ -6,6 +6,8 @@ from ultralytics import YOLO
 import os
 from flask import current_app
 from models import db, Detection, User
+from queue import Queue
+import json
 
 class CameraController:
     def __init__(self):
@@ -18,6 +20,7 @@ class CameraController:
             'blur_faces': True,
             'confidence_threshold': 0.4
         }
+        self.detection_queue = Queue()
         
         # Initialize YOLO model
         try:
@@ -160,6 +163,74 @@ class CameraController:
             self.schedule_check_thread.start()
             print("Started schedule check thread for next schedule")
 
+    def _handle_detection(self, frame, confidence):
+        try:
+            # Create detections directory if it doesn't exist
+            os.makedirs('detections', exist_ok=True)
+            
+            # Save image
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'detections/phone_{timestamp}.jpg'
+            
+            # Ensure the image is saved successfully
+            success = cv2.imwrite(filename, frame)
+            if not success:
+                raise Exception("Failed to save detection image")
+            
+            print(f"Saved detection image: {filename}")
+            
+            # Add detection to queue instead of direct database access
+            detection_data = {
+                'filename': filename,
+                'confidence': confidence,
+                'timestamp': timestamp
+            }
+            self.detection_queue.put(detection_data)
+            
+        except Exception as e:
+            print(f"Error handling detection: {e}")
+            # Clean up if something went wrong
+            if 'filename' in locals() and os.path.exists(filename):
+                os.remove(filename)
+
+    def process_detection_queue(self):
+        """Process the detection queue and save to database"""
+        while not self.detection_queue.empty():
+            try:
+                detection_data = self.detection_queue.get()
+                
+                # Import app here to avoid circular imports
+                from app import app
+                
+                with app.app_context():
+                    try:
+                        admin_user = User.query.filter_by(username='admin').first()
+                        if admin_user:
+                            detection = Detection(
+                                location='Camera 1',
+                                confidence=detection_data['confidence'],
+                                image_path=detection_data['filename'],
+                                status='Pending',
+                                user_id=admin_user.id
+                            )
+                            db.session.add(detection)
+                            db.session.commit()
+                            print(f"Created detection record with ID: {detection.id}")
+                        else:
+                            print("Error: Admin user not found")
+                            if os.path.exists(detection_data['filename']):
+                                os.remove(detection_data['filename'])
+                    except Exception as e:
+                        print(f"Database error: {e}")
+                        if os.path.exists(detection_data['filename']):
+                            os.remove(detection_data['filename'])
+                
+            except Exception as e:
+                print(f"Error processing detection queue: {e}")
+            
+            finally:
+                self.detection_queue.task_done()
+
     def _camera_loop(self):
         """Main camera loop for capturing and processing frames"""
         print("Starting camera loop...")
@@ -213,59 +284,14 @@ class CameraController:
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
                 
+                # Process detection queue periodically
+                self.process_detection_queue()
+                
             except Exception as e:
                 print(f"Error in camera loop: {e}")
                 time.sleep(1)
         
         print("Camera loop ended")
-
-    def _handle_detection(self, frame, confidence):
-        try:
-            # Create detections directory if it doesn't exist
-            os.makedirs('detections', exist_ok=True)
-            
-            # Save image
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'detections/phone_{timestamp}.jpg'
-            
-            # Ensure the image is saved successfully
-            success = cv2.imwrite(filename, frame)
-            if not success:
-                raise Exception("Failed to save detection image")
-            
-            print(f"Saved detection image: {filename}")
-            
-            # Create detection record using Flask app context
-            with current_app.app_context():
-                try:
-                    admin_user = User.query.filter_by(username='admin').first()
-                    if admin_user:
-                        detection = Detection(
-                            location='Camera 1',
-                            confidence=confidence,
-                            image_path=filename,
-                            status='Pending',
-                            user_id=admin_user.id
-                        )
-                        db.session.add(detection)
-                        db.session.commit()
-                        print(f"Created detection record with ID: {detection.id}")
-                    else:
-                        print("Error: Admin user not found")
-                        # Delete the saved image if we couldn't create the record
-                        if os.path.exists(filename):
-                            os.remove(filename)
-                except Exception as e:
-                    print(f"Database error: {e}")
-                    # Delete the saved image if database operation failed
-                    if os.path.exists(filename):
-                        os.remove(filename)
-        
-        except Exception as e:
-            print(f"Error handling detection: {e}")
-            # Clean up if something went wrong
-            if 'filename' in locals() and os.path.exists(filename):
-                os.remove(filename)
 
     def __del__(self):
         self.stop_camera() 
