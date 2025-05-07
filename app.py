@@ -103,7 +103,7 @@ def get_detections():
         'timestamp': d.timestamp.isoformat(),
         'location': d.location,
         'confidence': d.confidence,
-        'image_path': d.image_path,
+        'image_path': os.path.basename(d.image_path),
         'status': d.status
     } for d in detections])
 
@@ -118,15 +118,16 @@ def create_detection():
         return jsonify({'error': 'No selected file'}), 400
 
     # Save image
-    filename = f"detections/{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
     os.makedirs('detections', exist_ok=True)
-    file.save(filename)
+    filepath = os.path.join('detections', filename)
+    file.save(filepath)
 
     # Process image with YOLO
     if model is None:
         return jsonify({'error': 'YOLO model not loaded'}), 500
         
-    results = model(filename)
+    results = model(filepath)
     
     # Check for phone detection
     phone_detected = False
@@ -144,7 +145,7 @@ def create_detection():
         detection = Detection(
             location=request.form.get('location', 'Unknown'),
             confidence=confidence,
-            image_path=filename,
+            image_path=filename,  # Only filename
             status='Pending'
         )
         db.session.add(detection)

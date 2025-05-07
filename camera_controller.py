@@ -170,38 +170,31 @@ class CameraController:
             
             # Save image
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'detections/phone_{timestamp}.jpg'
-            
-            # Ensure the image is saved successfully
-            success = cv2.imwrite(filename, frame)
+            filename = f'phone_{timestamp}.jpg'  # Only filename
+            filepath = os.path.join('detections', filename)
+            success = cv2.imwrite(filepath, frame)
             if not success:
                 raise Exception("Failed to save detection image")
-            
-            print(f"Saved detection image: {filename}")
+            print(f"Saved detection image: {filepath}")
             
             # Add detection to queue instead of direct database access
             detection_data = {
-                'filename': filename,
+                'filename': filename,  # Only filename
                 'confidence': confidence,
                 'timestamp': timestamp
             }
             self.detection_queue.put(detection_data)
-            
         except Exception as e:
             print(f"Error handling detection: {e}")
-            # Clean up if something went wrong
-            if 'filename' in locals() and os.path.exists(filename):
-                os.remove(filename)
+            if 'filepath' in locals() and os.path.exists(filepath):
+                os.remove(filepath)
 
     def process_detection_queue(self):
         """Process the detection queue and save to database"""
         while not self.detection_queue.empty():
             try:
                 detection_data = self.detection_queue.get()
-                
-                # Import app here to avoid circular imports
                 from app import app
-                
                 with app.app_context():
                     try:
                         admin_user = User.query.filter_by(username='admin').first()
@@ -209,7 +202,7 @@ class CameraController:
                             detection = Detection(
                                 location='Camera 1',
                                 confidence=detection_data['confidence'],
-                                image_path=detection_data['filename'],
+                                image_path=detection_data['filename'],  # Only filename
                                 status='Pending',
                                 user_id=admin_user.id
                             )
@@ -218,16 +211,14 @@ class CameraController:
                             print(f"Created detection record with ID: {detection.id}")
                         else:
                             print("Error: Admin user not found")
-                            if os.path.exists(detection_data['filename']):
-                                os.remove(detection_data['filename'])
+                            if os.path.exists(os.path.join('detections', detection_data['filename'])):
+                                os.remove(os.path.join('detections', detection_data['filename']))
                     except Exception as e:
                         print(f"Database error: {e}")
-                        if os.path.exists(detection_data['filename']):
-                            os.remove(detection_data['filename'])
-                
+                        if os.path.exists(os.path.join('detections', detection_data['filename'])):
+                            os.remove(os.path.join('detections', detection_data['filename']))
             except Exception as e:
                 print(f"Error processing detection queue: {e}")
-            
             finally:
                 self.detection_queue.task_done()
 
