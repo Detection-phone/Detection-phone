@@ -18,14 +18,14 @@ class CameraController:
             'camera_start_time': '00:00',
             'camera_end_time': '23:59',
             'blur_faces': True,
-            'confidence_threshold': 0.4
+            'confidence_threshold': 0.2
         }
         self.detection_queue = Queue()
         
         # Initialize YOLO model
         try:
             print("Loading YOLO model...")
-            self.model = YOLO('yolov8n.pt')
+            self.model = YOLO('yolov8m.pt')
             print("YOLO model loaded successfully")
             
             # Find phone class ID
@@ -129,6 +129,10 @@ class CameraController:
             self.camera = cv2.VideoCapture(0)
             if not self.camera.isOpened():
                 raise Exception("Failed to open camera")
+            
+            # Set higher resolution
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             
             self.is_running = True
             print("Camera started successfully")
@@ -256,9 +260,9 @@ class CameraController:
                         face_roi = cv2.GaussianBlur(face_roi, (99, 99), 30)
                         frame[y:y+h, x:x+w] = face_roi
                 
-                # Process frame with YOLO every 15 frames
+                # Run detection every 5 frames
                 frame_count += 1
-                if frame_count % 15 == 0 and self.model is not None:
+                if frame_count % 5 == 0 and self.model is not None:
                     try:
                         results = self.model(frame, verbose=False)
                         for result in results:
