@@ -43,6 +43,8 @@ class CameraController:
             print(f"Error loading YOLO model: {e}")
             self.model = None
 
+        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
     def update_settings(self, settings):
         """Update camera settings and handle camera state"""
         print("\nUpdating camera settings...")
@@ -245,28 +247,38 @@ class CameraController:
                     time.sleep(1)
                     continue
                 
+                # Blur faces if enabled
+                if self.settings.get('blur_faces', False):
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
+                    for (x, y, w, h) in faces:
+                        face_roi = frame[y:y+h, x:x+w]
+                        face_roi = cv2.GaussianBlur(face_roi, (99, 99), 30)
+                        frame[y:y+h, x:x+w] = face_roi
+                
                 # Process frame with YOLO every 15 frames
                 frame_count += 1
                 if frame_count % 15 == 0 and self.model is not None:
                     try:
                         results = self.model(frame, verbose=False)
-                        
                         for result in results:
                             boxes = result.boxes
                             for box in boxes:
-                                if int(box.cls[0]) == self.phone_class_id:
-                                    confidence = float(box.conf[0])
-                                    if confidence >= self.settings['confidence_threshold']:
-                                        print(f"Phone detected with confidence: {confidence}")
-                                        
-                                        # Draw bounding box
-                                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                        cv2.putText(frame, f"Phone: {confidence:.2f}", (x1, y1 - 10),
-                                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                                        
-                                        # Handle detection
-                                        self._handle_detection(frame.copy(), confidence)
+                                class_id = int(box.cls[0])
+                                confidence = float(box.conf[0])
+                                if class_id == self.phone_class_id and confidence >= self.settings['confidence_threshold']:
+                                    print(f"Phone detected with confidence: {confidence}")
+                                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                    cv2.putText(frame, f"Phone: {confidence:.2f}", (x1, y1 - 10),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    self._handle_detection(frame.copy(), confidence)
+                                # Draw bounding box for person
+                                if class_id == 0 and confidence >= 0.5:  # 0 is 'person' in COCO
+                                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                                    cv2.putText(frame, f'Person: {confidence:.2f}', (x1, y1 - 10),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
                     except Exception as e:
                         print(f"Error processing frame with YOLO: {e}")
                 

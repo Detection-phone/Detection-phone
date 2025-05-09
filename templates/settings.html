@@ -53,31 +53,13 @@
                     <!-- Notification Settings -->
                     <div class="mb-4">
                         <h6>Notification Settings</h6>
-                        <div class="row">
-                            <div class="col-md-4">
-                                <div class="mb-3">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="emailEnabled" name="notifications[email]">
-                                        <label class="form-check-label" for="emailEnabled">Email Notifications</label>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <div class="mb-3">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="smsEnabled" name="notifications[sms]">
-                                        <label class="form-check-label" for="smsEnabled">SMS Notifications</label>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-4">
-                                <div class="mb-3">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="telegramEnabled" name="notifications[telegram]">
-                                        <label class="form-check-label" for="telegramEnabled">Telegram Notifications</label>
-                                    </div>
-                                </div>
-                            </div>
+                        <div class="form-check form-switch d-inline-block me-3">
+                            <input class="form-check-input" type="checkbox" id="emailEnabled" name="notifications[email]">
+                            <label class="form-check-label" for="emailEnabled">Email Notifications</label>
+                        </div>
+                        <div class="form-check form-switch d-inline-block me-3">
+                            <input class="form-check-input" type="checkbox" id="smsEnabled" name="notifications[sms]">
+                            <label class="form-check-label" for="smsEnabled">SMS Notifications</label>
                         </div>
                     </div>
 
@@ -107,7 +89,6 @@ async function loadSettings() {
         document.getElementById('blurFaces').checked = settings.blur_faces;
         document.getElementById('emailEnabled').checked = settings.notifications.email;
         document.getElementById('smsEnabled').checked = settings.notifications.sms;
-        document.getElementById('telegramEnabled').checked = settings.notifications.telegram;
     } catch (error) {
         console.error('Error loading settings:', error);
     }
@@ -129,8 +110,7 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
         blur_faces: document.getElementById('blurFaces').checked,
         notifications: {
             email: document.getElementById('emailEnabled').checked,
-            sms: document.getElementById('smsEnabled').checked,
-            telegram: document.getElementById('telegramEnabled').checked
+            sms: document.getElementById('smsEnabled').checked
         }
     };
 

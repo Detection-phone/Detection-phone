@@ -172,8 +172,7 @@ def get_settings():
         'confidence_threshold': camera_controller.settings['confidence_threshold'],
         'notifications': {
             'email': True,
-            'sms': False,
-            'telegram': True
+            'sms': False
         }
     })
 
