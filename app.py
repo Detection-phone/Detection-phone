@@ -165,11 +165,17 @@ def create_detection():
 @app.route('/api/settings', methods=['GET'])
 @login_required
 def get_settings():
+    # Get available cameras
+    available_cameras = CameraController.scan_available_cameras()
+    
     return jsonify({
         'camera_start_time': camera_controller.settings['camera_start_time'],
         'camera_end_time': camera_controller.settings['camera_end_time'],
         'blur_faces': camera_controller.settings['blur_faces'],
         'confidence_threshold': camera_controller.settings['confidence_threshold'],
+        'camera_index': camera_controller.settings['camera_index'],
+        'camera_name': camera_controller.settings['camera_name'],
+        'available_cameras': available_cameras,
         'notifications': {
             'email': True,
             'sms': False
@@ -191,6 +197,12 @@ def update_settings():
             'blur_faces': data['blur_faces'],
             'confidence_threshold': data['confidence_threshold']
         }
+        
+        # Handle camera selection
+        if 'camera_index' in data:
+            camera_settings['camera_index'] = int(data['camera_index'])
+        if 'camera_name' in data:
+            camera_settings['camera_name'] = data['camera_name']
         
         print(f"Updating camera controller with settings: {camera_settings}")
         camera_controller.update_settings(camera_settings)

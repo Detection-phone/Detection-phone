@@ -63,6 +63,16 @@
                         </div>
                     </div>
 
+                    <div class="settings-section">
+                        <h3>Camera Selection</h3>
+                        <div class="form-group">
+                            <label for="camera-select">Select Camera:</label>
+                            <select id="camera-select" class="form-control">
+                                <!-- Will be populated dynamically -->
+                            </select>
+                        </div>
+                    </div>
+
                     <div class="text-end">
                         <button type="submit" class="btn btn-primary">Save Settings</button>
                     </div>
@@ -75,23 +85,40 @@
 
 {% block scripts %}
 <script>
+// Function to populate camera select
+function populateCameraSelect(cameras) {
+    const select = document.getElementById('camera-select');
+    select.innerHTML = '';
+    
+    cameras.forEach(camera => {
+        const option = document.createElement('option');
+        option.value = camera.index;
+        option.textContent = `${camera.name} (${camera.resolution}, ${camera.fps} FPS)`;
+        select.appendChild(option);
+    });
+}
+
 // Function to load settings
-async function loadSettings() {
-    try {
-        const response = await fetch('/api/settings');
-        const settings = await response.json();
-        
-        // Update form fields
-        document.getElementById('cameraStartTime').value = settings.camera_start_time;
-        document.getElementById('cameraEndTime').value = settings.camera_end_time;
-        document.getElementById('confidenceThreshold').value = settings.confidence_threshold * 100;
-        document.getElementById('confidenceValue').textContent = `${(settings.confidence_threshold * 100).toFixed(0)}%`;
-        document.getElementById('blurFaces').checked = settings.blur_faces;
-        document.getElementById('emailEnabled').checked = settings.notifications.email;
-        document.getElementById('smsEnabled').checked = settings.notifications.sms;
-    } catch (error) {
-        console.error('Error loading settings:', error);
-    }
+function loadSettings() {
+    fetch('/api/settings')
+        .then(response => response.json())
+        .then(data => {
+            // Populate camera select
+            if (data.available_cameras) {
+                populateCameraSelect(data.available_cameras);
+                document.getElementById('camera-select').value = data.camera_index;
+            }
+            
+            // Update form fields
+            document.getElementById('cameraStartTime').value = data.camera_start_time;
+            document.getElementById('cameraEndTime').value = data.camera_end_time;
+            document.getElementById('confidenceThreshold').value = data.confidence_threshold * 100;
+            document.getElementById('confidenceValue').textContent = `${(data.confidence_threshold * 100).toFixed(0)}%`;
+            document.getElementById('blurFaces').checked = data.blur_faces;
+            document.getElementById('emailEnabled').checked = data.notifications.email;
+            document.getElementById('smsEnabled').checked = data.notifications.sms;
+        })
+        .catch(error => console.error('Error loading settings:', error));
 }
 
 // Function to update confidence value display
@@ -111,7 +138,8 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
         notifications: {
             email: document.getElementById('emailEnabled').checked,
             sms: document.getElementById('smsEnabled').checked
-        }
+        },
+        camera_index: parseInt(document.getElementById('camera-select').value)
     };
 
     try {

@@ -8,17 +8,37 @@ from flask import current_app
 from models import db, Detection, User
 from queue import Queue
 import json
+import subprocess
+import re
 
 class CameraController:
-    def __init__(self):
+    def __init__(self, camera_index=0, camera_name=None):
         self.camera = None
         self.is_running = False
         self.thread = None
+        
+        # If camera_name is provided, try to find its index
+        if camera_name:
+            print(f"\nAttempting to find camera by name: {camera_name}")
+            self.camera_index = self.find_camera_by_name(camera_name)
+            if self.camera_index is None:
+                print(f"Warning: Camera '{camera_name}' not found, using default index {camera_index}")
+                self.camera_index = camera_index
+        else:
+            self.camera_index = camera_index
+            
+        print(f"Using camera index: {self.camera_index}")
+        
+        # Verify camera availability
+        self._verify_camera()
+        
         self.settings = {
             'camera_start_time': '00:00',
             'camera_end_time': '23:59',
             'blur_faces': True,
-            'confidence_threshold': 0.2
+            'confidence_threshold': 0.2,
+            'camera_index': self.camera_index,
+            'camera_name': camera_name
         }
         self.detection_queue = Queue()
         
@@ -45,11 +65,46 @@ class CameraController:
 
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
+    def _verify_camera(self):
+        """Verify if the selected camera is available and working"""
+        print(f"\nVerifying camera with index {self.camera_index}...")
+        try:
+            cap = cv2.VideoCapture(self.camera_index)
+            if not cap.isOpened():
+                print(f"Error: Could not open camera with index {self.camera_index}")
+                # Try to find alternative camera
+                print("Scanning for available cameras...")
+                available_cameras = self.scan_available_cameras()
+                if available_cameras:
+                    print("Available cameras:")
+                    for cam in available_cameras:
+                        print(f"- Index {cam['index']}: {cam['name']} ({cam['resolution']}, {cam['fps']} FPS)")
+                    # Use the first available camera as fallback
+                    self.camera_index = available_cameras[0]['index']
+                    print(f"Falling back to camera index {self.camera_index}")
+                else:
+                    print("No cameras found!")
+            else:
+                # Get camera properties
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                print(f"Camera opened successfully: {width}x{height} @ {fps} FPS")
+            cap.release()
+        except Exception as e:
+            print(f"Error verifying camera: {e}")
+
     def update_settings(self, settings):
         """Update camera settings and handle camera state"""
         print("\nUpdating camera settings...")
         print(f"Current settings: {self.settings}")
         print(f"New settings: {settings}")
+        
+        # Check if camera index changed
+        if 'camera_index' in settings and settings['camera_index'] != self.settings['camera_index']:
+            print(f"Camera index changed from {self.settings['camera_index']} to {settings['camera_index']}")
+            self.camera_index = settings['camera_index']
+            self._verify_camera()
         
         # Update settings
         self.settings.update(settings)
@@ -125,17 +180,23 @@ class CameraController:
             return
         
         try:
-            print("Initializing camera...")
-            self.camera = cv2.VideoCapture(0)
+            print(f"\nInitializing camera with index {self.camera_index}...")
+            self.camera = cv2.VideoCapture(self.camera_index)
             if not self.camera.isOpened():
-                raise Exception("Failed to open camera")
+                raise Exception(f"Failed to open camera with index {self.camera_index}")
             
             # Set higher resolution
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             
+            # Verify camera properties
+            width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = self.camera.get(cv2.CAP_PROP_FPS)
+            print(f"Camera initialized successfully: {width}x{height} @ {fps} FPS")
+            
             self.is_running = True
-            print("Camera started successfully")
+            print(f"Camera started successfully with index {self.camera_index}")
             
             # Start camera loop in a separate thread
             self.camera_thread = threading.Thread(target=self._camera_loop)
@@ -301,4 +362,115 @@ class CameraController:
         print("Camera loop ended")
 
     def __del__(self):
-        self.stop_camera() 
+        self.stop_camera()
+
+    @staticmethod
+    def scan_available_cameras():
+        """Scan and list all available camera devices and their indices"""
+        available_cameras = []
+        
+        # Try to open cameras with indices 0-9
+        for index in range(10):
+            cap = cv2.VideoCapture(index)
+            if cap.isOpened():
+                # Get camera properties
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                
+                # Try to get camera name using PowerShell
+                try:
+                    cmd = f"powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object {{ $_.PNPClass -eq 'Camera' }} | Select-Object -Index {index} | Select-Object -ExpandProperty Name\""
+                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+                    name = result.stdout.strip() if result.returncode == 0 else f"Camera {index}"
+                    
+                    # Additional check for Iriun Webcam
+                    if "Iriun" in name:
+                        print(f"Found Iriun Webcam at index {index}")
+                        name = "Iriun Webcam"
+                except:
+                    name = f"Camera {index}"
+                
+                # Try to get more detailed device information
+                try:
+                    cmd = f"powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object {{ $_.PNPClass -eq 'Camera' }} | Select-Object -Index {index} | Select-Object -Property Name, DeviceID, Manufacturer, Description | ConvertTo-Json\""
+                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+                    if result.returncode == 0:
+                        device_info = json.loads(result.stdout)
+                        print(f"Device info for index {index}: {device_info}")
+                except Exception as e:
+                    print(f"Error getting device info for index {index}: {e}")
+                
+                available_cameras.append({
+                    'index': index,
+                    'name': name,
+                    'resolution': f"{width}x{height}",
+                    'fps': fps
+                })
+                
+                cap.release()
+        
+        return available_cameras
+
+    def find_camera_by_name(self, camera_name):
+        """Find camera index by device name using Media Foundation API"""
+        try:
+            print(f"\nSearching for camera: {camera_name}")
+            
+            # First try to find by exact name match
+            cmd = "powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Camera' } | Select-Object Name, DeviceID, Manufacturer, Description | ConvertTo-Json\""
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            
+            if result.returncode != 0:
+                print(f"Error getting camera list: {result.stderr}")
+                return None
+            
+            # Parse the output to find matching camera
+            devices = json.loads(result.stdout)
+            if not isinstance(devices, list):
+                devices = [devices]
+            
+            current_index = 0
+            for device in devices:
+                print(f"Checking device: {device}")
+                if camera_name.lower() in device['Name'].lower():
+                    print(f"Found camera '{camera_name}' at index {current_index}")
+                    return current_index
+                if "Camera" in device['Name']:
+                    current_index += 1
+            
+            # If not found by exact name, try scanning available cameras
+            print("Camera not found by name, scanning available cameras...")
+            available_cameras = self.scan_available_cameras()
+            for camera in available_cameras:
+                if camera_name.lower() in camera['name'].lower():
+                    print(f"Found camera '{camera_name}' at index {camera['index']}")
+                    return camera['index']
+            
+            print(f"Camera '{camera_name}' not found in device list")
+            return None
+            
+        except Exception as e:
+            print(f"Error finding camera by name: {e}")
+            return None
+
+# TODO: Implement dynamic camera detection by name
+# For Windows:
+# - Use Media Foundation API to enumerate video devices
+# - Example: https://docs.microsoft.com/en-us/windows/win32/medfound/enumerating-video-capture-devices
+# - Could use pygrabber or similar library to access Media Foundation
+#
+# For Linux:
+# - Use v4l2-ctl to list video devices
+# - Example: v4l2-ctl --list-devices
+# - Could parse output to find device by name
+#
+# Implementation could be added as a new method:
+# def find_camera_by_name(self, camera_name):
+#     """Find camera index by device name"""
+#     pass 
+
+# Przykład użycia:
+cameras = CameraController.scan_available_cameras()
+for camera in cameras:
+    print(f"Camera {camera['index']}: {camera['name']} ({camera['resolution']}, {camera['fps']} FPS)") 
