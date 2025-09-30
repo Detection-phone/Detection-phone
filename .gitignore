@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+
+# Node
+node_modules/
+
+# Data/Artifacts
+instance/*.db
+migrations/versions/__pycache__/
+detections/
+uploads/
+*.pt
+*.jpg
+*.jpeg
+*.png
+
+# OS/IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
