@@ -65,11 +65,67 @@ class CameraController:
 
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
+    def _open_capture(self, index):
+        """Open a cv2.VideoCapture with robust backend fallbacks.
+
+        On Windows, prefer DirectShow to avoid MSMF grabFrame errors.
+        Fallback order: CAP_DSHOW -> default (MSMF on Win) -> CAP_V4L2 (for WSL/Linux).
+        """
+        cap = None
+        # Try DirectShow first (Windows)
+        try:
+            cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+            if cap is not None and cap.isOpened():
+                return cap
+            if cap is not None:
+                cap.release()
+        except Exception:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
+        # Try default backend (MSMF on Windows)
+        cap = cv2.VideoCapture(index)
+        if cap is not None and cap.isOpened():
+            return cap
+        try:
+            cap.release()
+        except Exception:
+            pass
+
+        # Try V4L2 (mainly Linux)
+        try:
+            cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+            if cap is not None and cap.isOpened():
+                return cap
+            if cap is not None:
+                cap.release()
+        except Exception:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
+        return None
+
+    def _capture_has_valid_frame(self, cap, warmup_reads=5):
+        """Read a few frames to ensure the capture delivers non-empty images."""
+        try:
+            for _ in range(warmup_reads):
+                ret, frame = cap.read()
+                if ret and frame is not None and getattr(frame, 'size', 0) > 0:
+                    return True
+                time.sleep(0.05)
+        except Exception:
+            pass
+        return False
+
     def _verify_camera(self):
         """Verify if the selected camera is available and working"""
         print(f"\nVerifying camera with index {self.camera_index}...")
         try:
-            cap = cv2.VideoCapture(self.camera_index)
+            cap = self._open_capture(self.camera_index)
             if not cap.isOpened():
                 print(f"Error: Could not open camera with index {self.camera_index}")
                 # Try to find alternative camera
@@ -181,8 +237,40 @@ class CameraController:
         
         try:
             print(f"\nInitializing camera with index {self.camera_index}...")
-            self.camera = cv2.VideoCapture(self.camera_index)
-            if not self.camera.isOpened():
+            # Try multiple times with fallback backends and alternative indices
+            attempts = 0
+            last_error = None
+            self.camera = None
+            candidate_indices = [self.camera_index]
+            try:
+                alt = [c['index'] for c in self.scan_available_cameras() if c['index'] != self.camera_index]
+                candidate_indices.extend(alt)
+            except Exception:
+                pass
+
+            for idx in candidate_indices:
+                attempts = 0
+                while attempts < 3:
+                    cap = self._open_capture(idx)
+                    if cap is not None and cap.isOpened() and self._capture_has_valid_frame(cap):
+                        self.camera_index = idx
+                        self.camera = cap
+                        attempts = 99
+                        break
+                    if cap is not None:
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
+                    attempts += 1
+                    last_error = f"Failed to open camera index {idx} on attempt {attempts}"
+                    time.sleep(0.3)
+                if self.camera is not None:
+                    break
+
+            if self.camera is None or not self.camera.isOpened():
+                if last_error:
+                    print(last_error)
                 raise Exception(f"Failed to open camera with index {self.camera_index}")
             
             # Set higher resolution
@@ -293,6 +381,7 @@ class CameraController:
         """Main camera loop for capturing and processing frames"""
         print("Starting camera loop...")
         frame_count = 0
+        consecutive_failures = 0
         
         while self.is_running:
             try:
@@ -307,10 +396,34 @@ class CameraController:
                     break
                 
                 ret, frame = self.camera.read()
-                if not ret or frame is None:
+                if (not ret) or (frame is None) or (getattr(frame, 'size', 0) == 0):
+                    consecutive_failures += 1
                     print("Error reading frame")
-                    time.sleep(1)
-                    continue
+                    # Try to recover by re-opening the camera after a few failures
+                    if consecutive_failures >= 5:
+                        print("Too many read failures, attempting to reopen camera...")
+                        try:
+                            if self.camera is not None:
+                                self.camera.release()
+                            self.camera = self._open_capture(self.camera_index)
+                            if self.camera is None or not self.camera.isOpened() or not self._capture_has_valid_frame(self.camera):
+                                print("Reopen failed; will retry shortly")
+                                time.sleep(1)
+                                continue
+                            # Reset properties after reopen
+                            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                            consecutive_failures = 0
+                            print("Camera reopened successfully")
+                        except Exception as e:
+                            print(f"Error while reopening camera: {e}")
+                            time.sleep(1)
+                            continue
+                    else:
+                        time.sleep(1)
+                        continue
+                else:
+                    consecutive_failures = 0
                 
                 # Blur faces if enabled
                 if self.settings.get('blur_faces', False):
@@ -371,8 +484,23 @@ class CameraController:
         
         # Try to open cameras with indices 0-9
         for index in range(10):
-            cap = cv2.VideoCapture(index)
+            cap = None
+            controller_like = CameraController
+            # Use the same robust opener
+            try:
+                cap = controller_like._open_capture(controller_like, index)  # call as unbound method
+            except Exception:
+                cap = cv2.VideoCapture(index)
+            if cap is None:
+                continue
             if cap.isOpened():
+                # Ensure it can deliver a valid frame
+                if not controller_like._capture_has_valid_frame(controller_like, cap):
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    continue
                 # Get camera properties
                 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -409,6 +537,11 @@ class CameraController:
                 })
                 
                 cap.release()
+            else:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
         
         return available_cameras
 
@@ -470,7 +603,8 @@ class CameraController:
 #     """Find camera index by device name"""
 #     pass 
 
-# Przykład użycia:
-cameras = CameraController.scan_available_cameras()
-for camera in cameras:
-    print(f"Camera {camera['index']}: {camera['name']} ({camera['resolution']}, {camera['fps']} FPS)") 
+# Przykład użycia (uruchom bezpośrednio ten plik, nie przy imporcie)
+if __name__ == "__main__":
+    cameras = CameraController.scan_available_cameras()
+    for camera in cameras:
+        print(f"Camera {camera['index']}: {camera['name']} ({camera['resolution']}, {camera['fps']} FPS)")
