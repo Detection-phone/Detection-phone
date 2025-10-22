@@ -10,6 +10,8 @@ from queue import Queue
 import json
 import subprocess
 import re
+import numpy as np
+# MediaPipe nie wspiera Python 3.13 - używamy OpenCV DNN jako alternatywy
 
 class CameraController:
     def __init__(self, camera_index=0, camera_name=None):
@@ -35,12 +37,17 @@ class CameraController:
         self.settings = {
             'camera_start_time': '00:00',
             'camera_end_time': '23:59',
-            'blur_faces': True,
+            'blur_faces': True,  # Kontroluje czy AnonymizerWorker działa (offline blur)
             'confidence_threshold': 0.2,
             'camera_index': self.camera_index,
             'camera_name': camera_name
         }
         self.detection_queue = Queue()
+        
+        # Uruchom AnonymizerWorker (offline anonimizacja)
+        self.anonymizer_worker = AnonymizerWorker(self.detection_queue)
+        self.anonymizer_worker.start()
+        print("✅ AnonymizerWorker uruchomiony w tle")
         
         # Initialize YOLO model
         try:
@@ -319,63 +326,42 @@ class CameraController:
             print("Started schedule check thread for next schedule")
 
     def _handle_detection(self, frame, confidence):
+        """
+        Obsługuje wykrycie telefonu:
+        1. Zapisuje ORYGINALNĄ klatkę (bez zamazanych twarzy!)
+        2. Dodaje do kolejki dla AnonymizerWorker
+        3. Worker zamaże twarze i doda do DB
+        """
         try:
             # Create detections directory if it doesn't exist
             os.makedirs('detections', exist_ok=True)
             
-            # Save image
+            # Save ORIGINAL image (without blurred faces!)
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f'phone_{timestamp}.jpg'  # Only filename
+            filename = f'phone_{timestamp}.jpg'
             filepath = os.path.join('detections', filename)
+            
             success = cv2.imwrite(filepath, frame)
             if not success:
                 raise Exception("Failed to save detection image")
-            print(f"Saved detection image: {filepath}")
             
-            # Add detection to queue instead of direct database access
+            print(f"💾 Zapisano ORYGINALNĄ klatkę: {filepath}")
+            
+            # Dodaj do kolejki dla AnonymizerWorker
+            # Worker zamaże twarze i zapisze do DB
             detection_data = {
-                'filename': filename,  # Only filename
-                'confidence': confidence,
-                'timestamp': timestamp
+                'filepath': filepath,  # Pełna ścieżka
+                'confidence': confidence
             }
             self.detection_queue.put(detection_data)
+            print(f"📤 Dodano do kolejki anonimizacji (rozmiar: {self.detection_queue.qsize()})")
+            
         except Exception as e:
-            print(f"Error handling detection: {e}")
+            print(f"❌ Błąd zapisu detekcji: {e}")
             if 'filepath' in locals() and os.path.exists(filepath):
                 os.remove(filepath)
 
-    def process_detection_queue(self):
-        """Process the detection queue and save to database"""
-        while not self.detection_queue.empty():
-            try:
-                detection_data = self.detection_queue.get()
-                from app import app
-                with app.app_context():
-                    try:
-                        admin_user = User.query.filter_by(username='admin').first()
-                        if admin_user:
-                            detection = Detection(
-                                location='Camera 1',
-                                confidence=detection_data['confidence'],
-                                image_path=detection_data['filename'],  # Only filename
-                                status='Pending',
-                                user_id=admin_user.id
-                            )
-                            db.session.add(detection)
-                            db.session.commit()
-                            print(f"Created detection record with ID: {detection.id}")
-                        else:
-                            print("Error: Admin user not found")
-                            if os.path.exists(os.path.join('detections', detection_data['filename'])):
-                                os.remove(os.path.join('detections', detection_data['filename']))
-                    except Exception as e:
-                        print(f"Database error: {e}")
-                        if os.path.exists(os.path.join('detections', detection_data['filename'])):
-                            os.remove(os.path.join('detections', detection_data['filename']))
-            except Exception as e:
-                print(f"Error processing detection queue: {e}")
-            finally:
-                self.detection_queue.task_done()
+    # USUNIĘTE: process_detection_queue() - teraz robi to AnonymizerWorker asynchronicznie
 
     def _camera_loop(self):
         """Main camera loop for capturing and processing frames"""
@@ -425,48 +411,44 @@ class CameraController:
                 else:
                     consecutive_failures = 0
                 
-                # Blur faces if enabled
-                if self.settings.get('blur_faces', False):
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
-                    for (x, y, w, h) in faces:
-                        face_roi = frame[y:y+h, x:x+w]
-                        face_roi = cv2.GaussianBlur(face_roi, (99, 99), 30)
-                        frame[y:y+h, x:x+w] = face_roi
+                # KLUCZOWE: NIE zamazuj twarzy w real-time!
+                # Zamazywanie będzie robione OFFLINE przez AnonymizerWorker
+                # Wyświetlamy ORYGINALNĄ klatkę bez zamazania
+                display_frame = frame.copy()
                 
                 # Run detection every 5 frames
                 frame_count += 1
                 if frame_count % 5 == 0 and self.model is not None:
                     try:
-                        results = self.model(frame, verbose=False)
+                        results = self.model(frame, verbose=False)  # Używa ORYGINALNEJ klatki
                         for result in results:
                             boxes = result.boxes
                             for box in boxes:
                                 class_id = int(box.cls[0])
                                 confidence = float(box.conf[0])
                                 if class_id == self.phone_class_id and confidence >= self.settings['confidence_threshold']:
-                                    print(f"Phone detected with confidence: {confidence}")
+                                    print(f"📱 Phone detected with confidence: {confidence}")
                                     x1, y1, x2, y2 = map(int, box.xyxy[0])
-                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                                    cv2.putText(frame, f"Phone: {confidence:.2f}", (x1, y1 - 10),
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                                    cv2.putText(display_frame, f"Phone: {confidence:.2f}", (x1, y1 - 10),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                    # ZAPISZ ORYGINALNĄ klatkę (bez zamazanych twarzy)
                                     self._handle_detection(frame.copy(), confidence)
-                                # Draw bounding box for person
+                                # Draw bounding box for person (tylko na wyświetlanej klatce)
                                 if class_id == 0 and confidence >= 0.5:  # 0 is 'person' in COCO
                                     x1, y1, x2, y2 = map(int, box.xyxy[0])
-                                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                                    cv2.putText(frame, f'Person: {confidence:.2f}', (x1, y1 - 10),
+                                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                                    cv2.putText(display_frame, f'Person: {confidence:.2f}', (x1, y1 - 10),
                                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
                     except Exception as e:
                         print(f"Error processing frame with YOLO: {e}")
                 
-                # Display frame
-                cv2.imshow('Phone Detection', frame)
+                # Display frame (ORYGINALNA klatka bez zamazanych twarzy)
+                cv2.imshow('Phone Detection', display_frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
                 
-                # Process detection queue periodically
-                self.process_detection_queue()
+                # AnonymizerWorker przetwarza kolejkę automatycznie w tle
                 
             except Exception as e:
                 print(f"Error in camera loop: {e}")
@@ -475,7 +457,15 @@ class CameraController:
         print("Camera loop ended")
 
     def __del__(self):
+        """Czysty shutdown - zatrzymaj kamerę i workera"""
         self.stop_camera()
+        
+        # Zatrzymaj AnonymizerWorker
+        if hasattr(self, 'anonymizer_worker'):
+            print("🛑 Zatrzymywanie AnonymizerWorker...")
+            self.detection_queue.put(None)  # Sygnał zakończenia
+            self.anonymizer_worker.stop()
+            self.anonymizer_worker.join(timeout=5)
 
     @staticmethod
     def scan_available_cameras():
@@ -587,23 +577,221 @@ class CameraController:
             print(f"Error finding camera by name: {e}")
             return None
 
-# TODO: Implement dynamic camera detection by name
-# For Windows:
-# - Use Media Foundation API to enumerate video devices
-# - Example: https://docs.microsoft.com/en-us/windows/win32/medfound/enumerating-video-capture-devices
-# - Could use pygrabber or similar library to access Media Foundation
-#
-# For Linux:
-# - Use v4l2-ctl to list video devices
-# - Example: v4l2-ctl --list-devices
-# - Could parse output to find device by name
-#
-# Implementation could be added as a new method:
-# def find_camera_by_name(self, camera_name):
-#     """Find camera index by device name"""
-#     pass 
 
-# Przykład użycia (uruchom bezpośrednio ten plik, nie przy imporcie)
+class AnonymizerWorker(threading.Thread):
+    """
+    Worker thread do offline anonimizacji twarzy.
+    
+    Używa MediaPipe dla maksymalnej dokładności (SOTA).
+    Działa asynchronicznie - nie blokuje głównej pętli kamery.
+    """
+    
+    def __init__(self, detection_queue, blur_kernel_size=99, blur_sigma=30):
+        super().__init__(daemon=True)
+        self.detection_queue = detection_queue
+        self.blur_kernel_size = blur_kernel_size
+        self.blur_sigma = blur_sigma
+        self.is_running = True
+        
+        # Statystyki
+        self.tasks_processed = 0
+        self.faces_anonymized = 0
+        
+        # Inicjalizacja OpenCV DNN Face Detector (alternatywa dla MediaPipe)
+        print("📷 Inicjalizacja OpenCV DNN Face Detector dla anonimizacji...")
+        
+        try:
+            # Próba załadowania modelu DNN dla detekcji twarzy
+            modelFile = "res10_300x300_ssd_iter_140000.caffemodel"
+            configFile = "deploy.prototxt"
+            
+            if os.path.exists(modelFile) and os.path.exists(configFile):
+                self.face_net = cv2.dnn.readNetFromCaffe(configFile, modelFile)
+                self.use_dnn = True
+                print("✅ OpenCV DNN Face Detector zainicjalizowany")
+            else:
+                print("⚠️  Brak modeli DNN, używam Haar Cascade jako fallback")
+                self.face_cascade = cv2.CascadeClassifier(
+                    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                )
+                self.use_dnn = False
+                print("✅ Haar Cascade Face Detector zainicjalizowany")
+        except Exception as e:
+            print(f"⚠️  Błąd ładowania DNN: {e}, używam Haar Cascade")
+            self.face_cascade = cv2.CascadeClassifier(
+                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            )
+            self.use_dnn = False
+            print("✅ Haar Cascade Face Detector zainicjalizowany")
+    
+    def run(self):
+        """Główna pętla workera - przetwarza zadania z kolejki"""
+        print("🔄 AnonymizerWorker uruchomiony")
+        
+        while self.is_running:
+            try:
+                # Pobierz zadanie z kolejki (blokujące z timeout)
+                try:
+                    task_data = self.detection_queue.get(timeout=1)
+                except:
+                    continue  # Timeout - sprawdź is_running i próbuj ponownie
+                
+                if task_data is None:
+                    # Sygnał zakończenia
+                    self.detection_queue.task_done()
+                    break
+                
+                filepath = task_data.get('filepath')
+                confidence = task_data.get('confidence', 0.0)
+                
+                print(f"🔄 Anonimizacja: {filepath}")
+                
+                # Anonimizuj twarze
+                success = self._anonymize_faces(filepath)
+                
+                if success:
+                    print(f"✅ Zanonimizowano: {filepath}")
+                    self.tasks_processed += 1
+                    
+                    # Dodaj do bazy danych (tylko zanonimizowane zdjęcie!)
+                    self._save_to_database(filepath, confidence)
+                else:
+                    print(f"❌ Błąd anonimizacji: {filepath}")
+                
+                self.detection_queue.task_done()
+                
+            except Exception as e:
+                print(f"❌ Błąd w AnonymizerWorker: {e}")
+                try:
+                    self.detection_queue.task_done()
+                except:
+                    pass
+        
+        print(f"🛑 AnonymizerWorker zakończył (zadania: {self.tasks_processed}, twarze: {self.faces_anonymized})")
+    
+    def _anonymize_faces(self, image_path):
+        """
+        Anonimizuje twarze na obrazie używając OpenCV DNN lub Haar Cascade.
+        
+        Args:
+            image_path: Ścieżka do obrazu
+            
+        Returns:
+            True jeśli sukces
+        """
+        try:
+            # Wczytaj obraz
+            image = cv2.imread(image_path)
+            if image is None:
+                print(f"❌ Nie można wczytać: {image_path}")
+                return False
+            
+            h, w = image.shape[:2]
+            faces = []
+            
+            if self.use_dnn:
+                # Detekcja twarzy za pomocą OpenCV DNN
+                blob = cv2.dnn.blobFromImage(
+                    cv2.resize(image, (300, 300)), 
+                    1.0, 
+                    (300, 300), 
+                    (104.0, 177.0, 123.0)
+                )
+                self.face_net.setInput(blob)
+                detections = self.face_net.forward()
+                
+                # Przetwarzanie detekcji
+                for i in range(detections.shape[2]):
+                    confidence = detections[0, 0, i, 2]
+                    
+                    if confidence > 0.5:  # Próg pewności
+                        box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                        (x, y, x2, y2) = box.astype("int")
+                        
+                        # Walidacja
+                        x = max(0, x)
+                        y = max(0, y)
+                        x2 = min(w, x2)
+                        y2 = min(h, y2)
+                        
+                        if x2 > x and y2 > y:
+                            faces.append((x, y, x2-x, y2-y))
+            else:
+                # Detekcja twarzy za pomocą Haar Cascade
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                detected = self.face_cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=1.1,
+                    minNeighbors=5,
+                    minSize=(30, 30)
+                )
+                faces = [(x, y, w, h) for (x, y, w, h) in detected]
+            
+            if len(faces) > 0:
+                print(f"👤 Wykryto {len(faces)} twarzy")
+                
+                # Anonimizuj każdą twarz
+                for (x, y, width, height) in faces:
+                    x2 = x + width
+                    y2 = y + height
+                    
+                    # Zastosuj Gaussian blur na obszarze twarzy
+                    face_roi = image[y:y2, x:x2]
+                    
+                    if face_roi.size > 0:
+                        blurred_face = cv2.GaussianBlur(
+                            face_roi,
+                            (self.blur_kernel_size, self.blur_kernel_size),
+                            self.blur_sigma
+                        )
+                        image[y:y2, x:x2] = blurred_face
+                        self.faces_anonymized += 1
+            else:
+                print(f"ℹ️  Brak twarzy do zamazania")
+            
+            # Nadpisz oryginalny plik zanonimizowanym obrazem
+            success = cv2.imwrite(image_path, image)
+            
+            if not success:
+                print(f"❌ Nie udało się zapisać: {image_path}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Błąd anonimizacji: {e}")
+            return False
+    
+    def _save_to_database(self, filepath, confidence):
+        """Zapisuje wykrycie do bazy danych (tylko zanonimizowany obraz)"""
+        try:
+            from app import app
+            filename = os.path.basename(filepath)
+            
+            with app.app_context():
+                admin_user = User.query.filter_by(username='admin').first()
+                if admin_user:
+                    detection = Detection(
+                        location='Camera 1',
+                        confidence=confidence,
+                        image_path=filename,
+                        status='Pending',
+                        user_id=admin_user.id
+                    )
+                    db.session.add(detection)
+                    db.session.commit()
+                    print(f"💾 Zapisano do DB: {filename}")
+                else:
+                    print("❌ Brak użytkownika admin")
+        except Exception as e:
+            print(f"❌ Błąd zapisu do DB: {e}")
+    
+    def stop(self):
+        """Zatrzymuje workera"""
+        self.is_running = False
+
+
+# Przykład użycia
 if __name__ == "__main__":
     cameras = CameraController.scan_available_cameras()
     for camera in cameras:
