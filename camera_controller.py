@@ -686,7 +686,8 @@ class AnonymizerWorker(threading.Thread):
                 print(f"❌ Nie można wczytać: {image_path}")
                 return False
             
-            h, w = image.shape[:2]
+            # Pobierz wymiary CAŁEGO obrazu (raz, przed pętlą)
+            img_h, img_w = image.shape[:2]
             faces = []
             
             if self.use_dnn:
@@ -705,14 +706,14 @@ class AnonymizerWorker(threading.Thread):
                     confidence = detections[0, 0, i, 2]
                     
                     if confidence > 0.5:  # Próg pewności
-                        box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                        box = detections[0, 0, i, 3:7] * np.array([img_w, img_h, img_w, img_h])
                         (x, y, x2, y2) = box.astype("int")
                         
                         # Walidacja
                         x = max(0, x)
                         y = max(0, y)
-                        x2 = min(w, x2)
-                        y2 = min(h, y2)
+                        x2 = min(img_w, x2)
+                        y2 = min(img_h, y2)
                         
                         if x2 > x and y2 > y:
                             faces.append((x, y, x2-x, y2-y))
@@ -730,22 +731,44 @@ class AnonymizerWorker(threading.Thread):
             if len(faces) > 0:
                 print(f"👤 Wykryto {len(faces)} twarzy")
                 
-                # Anonimizuj każdą twarz
+                # Anonimizuj każdą twarz (z paddingiem dla całej głowy)
                 for (x, y, width, height) in faces:
-                    x2 = x + width
-                    y2 = y + height
+                    # Oblicz padding aby objąć całą głowę
+                    padding_w = int(width * 0.30)   # 30% szerokości w każdą stronę
+                    padding_h = int(height * 0.40)  # 40% wysokości (góra/dół)
                     
-                    # Zastosuj Gaussian blur na obszarze twarzy
-                    face_roi = image[y:y2, x:x2]
+                    # Nowe współrzędne z paddingiem
+                    x1 = x - padding_w
+                    y1 = y - padding_h
+                    x2 = x + width + padding_w
+                    y2 = y + height + padding_h
                     
+                    # Walidacja granic (clamping) - POPRAWIONA: używa img_w i img_h
+                    x1 = max(0, x1)
+                    y1 = max(0, y1)
+                    x2 = min(img_w, x2)  # <-- Użyj img_w (szerokość obrazu)
+                    y2 = min(img_h, y2)  # <-- Użyj img_h (wysokość obrazu)
+                    
+                    # Zabezpieczenie: sprawdź czy ROI ma sens
+                    if x2 <= x1 or y2 <= y1:
+                        print(f"⚠️  Nieprawidłowy ROI: ({x1},{y1})-({x2},{y2}), pomijam")
+                        continue
+                    
+                    # Wytnij powiększony ROI
+                    face_roi = image[y1:y2, x1:x2]
+                    
+                    # Zastosuj Gaussian blur na całej głowie
                     if face_roi.size > 0:
                         blurred_face = cv2.GaussianBlur(
                             face_roi,
                             (self.blur_kernel_size, self.blur_kernel_size),
                             self.blur_sigma
                         )
-                        image[y:y2, x:x2] = blurred_face
+                        image[y1:y2, x1:x2] = blurred_face
                         self.faces_anonymized += 1
+                        print(f"  ✓ Zanonimizowano głowę: ROI {width}x{height} → {x2-x1}x{y2-y1} (+{padding_w}w, +{padding_h}h)")
+                    else:
+                        print(f"⚠️  Pusty ROI dla twarzy, pomijam")
             else:
                 print(f"ℹ️  Brak twarzy do zamazania")
             
