@@ -580,49 +580,35 @@ class CameraController:
 
 class AnonymizerWorker(threading.Thread):
     """
-    Worker thread do offline anonimizacji twarzy.
+    Worker thread do offline anonimizacji osób (górna część ciała).
     
-    Używa MediaPipe dla maksymalnej dokładności (SOTA).
+    Używa YOLOv8 do wykrywania osób, zamazuje tylko głowę i ramiona.
     Działa asynchronicznie - nie blokuje głównej pętli kamery.
     """
     
-    def __init__(self, detection_queue, blur_kernel_size=99, blur_sigma=30):
+    def __init__(self, detection_queue, blur_kernel_size=99, blur_sigma=30, upper_body_ratio=0.35):
         super().__init__(daemon=True)
         self.detection_queue = detection_queue
         self.blur_kernel_size = blur_kernel_size
         self.blur_sigma = blur_sigma
+        self.upper_body_ratio = upper_body_ratio  # Jaki procent górnej części bbox osoby zamazać
         self.is_running = True
         
         # Statystyki
         self.tasks_processed = 0
-        self.faces_anonymized = 0
+        self.persons_anonymized = 0
         
-        # Inicjalizacja OpenCV DNN Face Detector (alternatywa dla MediaPipe)
-        print("📷 Inicjalizacja OpenCV DNN Face Detector dla anonimizacji...")
+        # Inicjalizacja YOLOv8 dla detekcji osób
+        print("📷 Inicjalizacja YOLOv8 dla detekcji osób (anonimizacja)...")
         
         try:
-            # Próba załadowania modelu DNN dla detekcji twarzy
-            modelFile = "res10_300x300_ssd_iter_140000.caffemodel"
-            configFile = "deploy.prototxt"
-            
-            if os.path.exists(modelFile) and os.path.exists(configFile):
-                self.face_net = cv2.dnn.readNetFromCaffe(configFile, modelFile)
-                self.use_dnn = True
-                print("✅ OpenCV DNN Face Detector zainicjalizowany")
-            else:
-                print("⚠️  Brak modeli DNN, używam Haar Cascade jako fallback")
-                self.face_cascade = cv2.CascadeClassifier(
-                    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-                )
-                self.use_dnn = False
-                print("✅ Haar Cascade Face Detector zainicjalizowany")
+            # Załaduj model YOLOv8 (ten sam, który wykrywa telefony)
+            self.model = YOLO('yolov8m.pt')
+            print("✅ YOLOv8 zainicjalizowany dla anonimizacji")
+            print(f"   Zamazywanie górnych {int(self.upper_body_ratio * 100)}% ciała osoby")
         except Exception as e:
-            print(f"⚠️  Błąd ładowania DNN: {e}, używam Haar Cascade")
-            self.face_cascade = cv2.CascadeClassifier(
-                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            )
-            self.use_dnn = False
-            print("✅ Haar Cascade Face Detector zainicjalizowany")
+            print(f"❌ Błąd ładowania YOLOv8: {e}")
+            self.model = None
     
     def run(self):
         """Główna pętla workera - przetwarza zadania z kolejki"""
@@ -667,11 +653,16 @@ class AnonymizerWorker(threading.Thread):
                 except:
                     pass
         
-        print(f"🛑 AnonymizerWorker zakończył (zadania: {self.tasks_processed}, twarze: {self.faces_anonymized})")
+        print(f"🛑 AnonymizerWorker zakończył (zadania: {self.tasks_processed}, osoby: {self.persons_anonymized})")
     
     def _anonymize_faces(self, image_path):
         """
-        Anonimizuje twarze na obrazie używając OpenCV DNN lub Haar Cascade.
+        Anonimizuje górną część ciała osób (głowa + ramiona) używając YOLOv8.
+        
+        Strategia:
+        - Wykrywa osoby (klasa 0) za pomocą YOLOv8
+        - Dla każdej osoby zamazuje tylko górną część bbox (30-40%)
+        - Jeśli brak osób - zapisuje oryginał bez zmian
         
         Args:
             image_path: Ścieżka do obrazu
@@ -680,99 +671,86 @@ class AnonymizerWorker(threading.Thread):
             True jeśli sukces
         """
         try:
+            # Sprawdź czy model jest dostępny
+            if self.model is None:
+                print("⚠️  Model YOLOv8 niedostępny, zapisuję oryginał")
+                return True  # Brak modelu = zapisz oryginał
+            
             # Wczytaj obraz
             image = cv2.imread(image_path)
             if image is None:
                 print(f"❌ Nie można wczytać: {image_path}")
                 return False
             
-            # Pobierz wymiary CAŁEGO obrazu (raz, przed pętlą)
+            # Pobierz wymiary obrazu
             img_h, img_w = image.shape[:2]
-            faces = []
             
-            if self.use_dnn:
-                # Detekcja twarzy za pomocą OpenCV DNN
-                blob = cv2.dnn.blobFromImage(
-                    cv2.resize(image, (300, 300)), 
-                    1.0, 
-                    (300, 300), 
-                    (104.0, 177.0, 123.0)
-                )
-                self.face_net.setInput(blob)
-                detections = self.face_net.forward()
-                
-                # Przetwarzanie detekcji
-                for i in range(detections.shape[2]):
-                    confidence = detections[0, 0, i, 2]
+            # Wykryj osoby za pomocą YOLOv8
+            results = self.model(image, verbose=False)
+            
+            persons_found = 0
+            
+            # Przetwórz wyniki
+            for result in results:
+                boxes = result.boxes
+                for box in boxes:
+                    class_id = int(box.cls[0])
+                    confidence = float(box.conf[0])
                     
-                    if confidence > 0.5:  # Próg pewności
-                        box = detections[0, 0, i, 3:7] * np.array([img_w, img_h, img_w, img_h])
-                        (x, y, x2, y2) = box.astype("int")
+                    # Szukamy tylko klasy 'person' (0 w COCO)
+                    if class_id == 0 and confidence >= 0.5:
+                        persons_found += 1
                         
-                        # Walidacja
-                        x = max(0, x)
-                        y = max(0, y)
-                        x2 = min(img_w, x2)
-                        y2 = min(img_h, y2)
+                        # Pobierz pełny bounding box osoby
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
                         
-                        if x2 > x and y2 > y:
-                            faces.append((x, y, x2-x, y2-y))
-            else:
-                # Detekcja twarzy za pomocą Haar Cascade
-                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-                detected = self.face_cascade.detectMultiScale(
-                    gray,
-                    scaleFactor=1.1,
-                    minNeighbors=5,
-                    minSize=(30, 30)
-                )
-                faces = [(x, y, w, h) for (x, y, w, h) in detected]
+                        # Oblicz wysokość bbox osoby
+                        person_height = y2 - y1
+                        
+                        # Oblicz górną część ciała (upper_body_ratio % wysokości od góry)
+                        upper_body_height = int(person_height * self.upper_body_ratio)
+                        
+                        # Definiuj ROI dla górnej części ciała
+                        # X: cały bbox osoby (lewa-prawa)
+                        # Y: tylko górna część
+                        roi_x1 = x1
+                        roi_y1 = y1
+                        roi_x2 = x2
+                        roi_y2 = y1 + upper_body_height
+                        
+                        # Walidacja granic obrazu
+                        roi_x1 = max(0, roi_x1)
+                        roi_y1 = max(0, roi_y1)
+                        roi_x2 = min(img_w, roi_x2)
+                        roi_y2 = min(img_h, roi_y2)
+                        
+                        # Sprawdź czy ROI ma sens
+                        if roi_x2 <= roi_x1 or roi_y2 <= roi_y1:
+                            print(f"⚠️  Nieprawidłowy ROI osoby: ({roi_x1},{roi_y1})-({roi_x2},{roi_y2}), pomijam")
+                            continue
+                        
+                        # Wytnij ROI górnej części ciała
+                        upper_body_roi = image[roi_y1:roi_y2, roi_x1:roi_x2]
+                        
+                        # Zastosuj silny Gaussian blur
+                        if upper_body_roi.size > 0:
+                            blurred_upper_body = cv2.GaussianBlur(
+                                upper_body_roi,
+                                (self.blur_kernel_size, self.blur_kernel_size),
+                                self.blur_sigma
+                            )
+                            image[roi_y1:roi_y2, roi_x1:roi_x2] = blurred_upper_body
+                            self.persons_anonymized += 1
+                            print(f"  ✓ Zanonimizowano osobę #{persons_found}: górne {upper_body_height}px z {person_height}px (conf: {confidence:.2f})")
+                        else:
+                            print(f"⚠️  Pusty ROI dla osoby, pomijam")
             
-            if len(faces) > 0:
-                print(f"👤 Wykryto {len(faces)} twarzy")
-                
-                # Anonimizuj każdą twarz (z paddingiem dla całej głowy)
-                for (x, y, width, height) in faces:
-                    # Oblicz padding aby objąć całą głowę
-                    padding_w = int(width * 0.30)   # 30% szerokości w każdą stronę
-                    padding_h = int(height * 0.40)  # 40% wysokości (góra/dół)
-                    
-                    # Nowe współrzędne z paddingiem
-                    x1 = x - padding_w
-                    y1 = y - padding_h
-                    x2 = x + width + padding_w
-                    y2 = y + height + padding_h
-                    
-                    # Walidacja granic (clamping) - POPRAWIONA: używa img_w i img_h
-                    x1 = max(0, x1)
-                    y1 = max(0, y1)
-                    x2 = min(img_w, x2)  # <-- Użyj img_w (szerokość obrazu)
-                    y2 = min(img_h, y2)  # <-- Użyj img_h (wysokość obrazu)
-                    
-                    # Zabezpieczenie: sprawdź czy ROI ma sens
-                    if x2 <= x1 or y2 <= y1:
-                        print(f"⚠️  Nieprawidłowy ROI: ({x1},{y1})-({x2},{y2}), pomijam")
-                        continue
-                    
-                    # Wytnij powiększony ROI
-                    face_roi = image[y1:y2, x1:x2]
-                    
-                    # Zastosuj Gaussian blur na całej głowie
-                    if face_roi.size > 0:
-                        blurred_face = cv2.GaussianBlur(
-                            face_roi,
-                            (self.blur_kernel_size, self.blur_kernel_size),
-                            self.blur_sigma
-                        )
-                        image[y1:y2, x1:x2] = blurred_face
-                        self.faces_anonymized += 1
-                        print(f"  ✓ Zanonimizowano głowę: ROI {width}x{height} → {x2-x1}x{y2-y1} (+{padding_w}w, +{padding_h}h)")
-                    else:
-                        print(f"⚠️  Pusty ROI dla twarzy, pomijam")
+            if persons_found == 0:
+                print(f"ℹ️  Brak osób na obrazie - zapisuję oryginał bez zmian")
             else:
-                print(f"ℹ️  Brak twarzy do zamazania")
+                print(f"👤 Zanonimizowano {persons_found} osób (tylko górna część ciała)")
             
-            # Nadpisz oryginalny plik zanonimizowanym obrazem
+            # Nadpisz oryginalny plik (zanonimizowanym lub oryginalnym jeśli brak osób)
             success = cv2.imwrite(image_path, image)
             
             if not success:
