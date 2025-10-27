@@ -586,7 +586,7 @@ class AnonymizerWorker(threading.Thread):
     Działa asynchronicznie - nie blokuje głównej pętli kamery.
     """
     
-    def __init__(self, detection_queue, blur_kernel_size=99, blur_sigma=30, upper_body_ratio=0.35):
+    def __init__(self, detection_queue, blur_kernel_size=99, blur_sigma=30, upper_body_ratio=0.50):
         super().__init__(daemon=True)
         self.detection_queue = detection_queue
         self.blur_kernel_size = blur_kernel_size
