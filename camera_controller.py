@@ -11,7 +11,21 @@ import json
 import subprocess
 import re
 import numpy as np
+from dotenv import load_dotenv
+
+# Load environment variables (Twilio, Google Drive)
+load_dotenv()
+
 # MediaPipe nie wspiera Python 3.13 - używamy OpenCV DNN jako alternatywy
+
+# Imports for SMS notifications and Google Drive
+from vonage import Auth
+from vonage_sms import Sms
+from vonage_sms.requests import SmsMessage
+from vonage_http_client import HttpClient
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 class CameraController:
     def __init__(self, camera_index=0, camera_name=None):
@@ -40,12 +54,14 @@ class CameraController:
             'blur_faces': True,  # Kontroluje czy AnonymizerWorker działa (offline blur)
             'confidence_threshold': 0.2,
             'camera_index': self.camera_index,
-            'camera_name': camera_name
+            'camera_name': camera_name,
+            'sms_notifications': False  # SMS notifications (Twilio + Google Drive)
         }
         self.detection_queue = Queue()
         
-        # Uruchom AnonymizerWorker (offline anonimizacja)
-        self.anonymizer_worker = AnonymizerWorker(self.detection_queue)
+        # Uruchom AnonymizerWorker (offline anonimizacja + SMS notifications)
+        # Przekaż referencję do settings, aby worker miał dostęp do 'sms_notifications'
+        self.anonymizer_worker = AnonymizerWorker(self.detection_queue, self.settings)
         self.anonymizer_worker.start()
         print("✅ AnonymizerWorker uruchomiony w tle")
         
@@ -329,8 +345,8 @@ class CameraController:
         """
         Obsługuje wykrycie telefonu:
         1. Zapisuje ORYGINALNĄ klatkę (bez zamazanych twarzy!)
-        2. Dodaje do kolejki dla AnonymizerWorker
-        3. Worker zamaże twarze i doda do DB
+        2. Dodaje do kolejki dla AnonymizerWorker z ZAMROŻONĄ konfiguracją blur
+        3. Worker zamaże twarze (jeśli włączone) i doda do DB
         """
         try:
             # Create detections directory if it doesn't exist
@@ -347,14 +363,20 @@ class CameraController:
             
             print(f"💾 Zapisano ORYGINALNĄ klatkę: {filepath}")
             
+            # KLUCZOWE: Zamroź konfigurację blur w momencie detekcji
+            # Ta wartość zostanie przekazana do workera razem z zadaniem
+            should_blur = self.settings.get('blur_faces', True)
+            
             # Dodaj do kolejki dla AnonymizerWorker
-            # Worker zamaże twarze i zapisze do DB
+            # Worker zamaże twarze (jeśli should_blur=True) i zapisze do DB
             detection_data = {
                 'filepath': filepath,  # Pełna ścieżka
-                'confidence': confidence
+                'confidence': confidence,
+                'should_blur': should_blur  # Pipe the setting!
             }
             self.detection_queue.put(detection_data)
-            print(f"📤 Dodano do kolejki anonimizacji (rozmiar: {self.detection_queue.qsize()})")
+            blur_status = "z zamazaniem" if should_blur else "BEZ zamazania"
+            print(f"📤 Dodano do kolejki anonimizacji {blur_status} (rozmiar: {self.detection_queue.qsize()})")
             
         except Exception as e:
             print(f"❌ Błąd zapisu detekcji: {e}")
@@ -584,11 +606,13 @@ class AnonymizerWorker(threading.Thread):
     
     Używa YOLOv8 do wykrywania osób, zamazuje tylko głowę i ramiona.
     Działa asynchronicznie - nie blokuje głównej pętli kamery.
+    Obsługuje również powiadomienia SMS przez Twilio i Google Drive.
     """
     
-    def __init__(self, detection_queue, blur_kernel_size=99, blur_sigma=30, upper_body_ratio=0.50):
+    def __init__(self, detection_queue, settings, blur_kernel_size=99, blur_sigma=30, upper_body_ratio=0.50):
         super().__init__(daemon=True)
         self.detection_queue = detection_queue
+        self.settings = settings  # Referencja do settings z CameraController
         self.blur_kernel_size = blur_kernel_size
         self.blur_sigma = blur_sigma
         self.upper_body_ratio = upper_body_ratio  # Jaki procent górnej części bbox osoby zamazać
@@ -609,6 +633,48 @@ class AnonymizerWorker(threading.Thread):
         except Exception as e:
             print(f"❌ Błąd ładowania YOLOv8: {e}")
             self.model = None
+        
+        # Inicjalizacja klienta Vonage (Nexmo) dla SMS
+        print("📱 Inicjalizacja klienta Vonage...")
+        try:
+            self.vonage_api_key = os.getenv('VONAGE_API_KEY')
+            self.vonage_api_secret = os.getenv('VONAGE_API_SECRET')
+            self.vonage_from_number = os.getenv('VONAGE_FROM_NUMBER', 'PhoneDetection')
+            self.vonage_to_number = os.getenv('VONAGE_TO_NUMBER')
+            
+            if all([self.vonage_api_key, self.vonage_api_secret, self.vonage_to_number]):
+                # Vonage v4+ używa Auth → HttpClient → Sms
+                vonage_auth = Auth(api_key=self.vonage_api_key, api_secret=self.vonage_api_secret)
+                vonage_http_client = HttpClient(vonage_auth)
+                self.vonage_sms = Sms(vonage_http_client)
+                print("✅ Klient Vonage zainicjalizowany")
+            else:
+                self.vonage_sms = None
+                print("⚠️  Brak danych Vonage w zmiennych środowiskowych")
+        except Exception as e:
+            print(f"❌ Błąd inicjalizacji Vonage: {e}")
+            self.vonage_sms = None
+        
+        # Inicjalizacja Google Drive API
+        print("☁️  Inicjalizacja Google Drive API...")
+        try:
+            service_account_file = 'service_account.json'
+            if os.path.exists(service_account_file):
+                scopes = ['https://www.googleapis.com/auth/drive.file']
+                credentials = service_account.Credentials.from_service_account_file(
+                    service_account_file, scopes=scopes
+                )
+                self.drive_service = build('drive', 'v3', credentials=credentials)
+                # ID folderu na Shared Drive (Google Workspace)
+                self.drive_folder_id = "0AKO-cqj6Qbv8Uk9PVA"
+                print("✅ Google Drive API zainicjalizowane")
+                print(f"   Shared Drive Folder ID: {self.drive_folder_id}")
+            else:
+                self.drive_service = None
+                print(f"⚠️  Brak pliku {service_account_file}")
+        except Exception as e:
+            print(f"❌ Błąd inicjalizacji Google Drive: {e}")
+            self.drive_service = None
     
     def run(self):
         """Główna pętla workera - przetwarza zadania z kolejki"""
@@ -629,20 +695,42 @@ class AnonymizerWorker(threading.Thread):
                 
                 filepath = task_data.get('filepath')
                 confidence = task_data.get('confidence', 0.0)
+                # KLUCZOWE: Odczytaj flagę should_blur (domyślnie True dla bezpieczeństwa)
+                should_blur = task_data.get('should_blur', True)
                 
-                print(f"🔄 Anonimizacja: {filepath}")
+                print(f"🔄 Przetwarzanie: {filepath} (blur: {should_blur})")
                 
-                # Anonimizuj twarze
-                success = self._anonymize_faces(filepath)
-                
-                if success:
-                    print(f"✅ Zanonimizowano: {filepath}")
-                    self.tasks_processed += 1
+                # Wykonaj anonimizację TYLKO jeśli should_blur = True
+                if should_blur:
+                    success = self._anonymize_faces(filepath)
                     
-                    # Dodaj do bazy danych (tylko zanonimizowane zdjęcie!)
-                    self._save_to_database(filepath, confidence)
+                    if success:
+                        print(f"✅ Zanonimizowano: {filepath}")
+                        self.tasks_processed += 1
+                    else:
+                        print(f"❌ Błąd anonimizacji: {filepath}")
                 else:
-                    print(f"❌ Błąd anonimizacji: {filepath}")
+                    # Blur wyłączony - pomiń anonimizację całkowicie
+                    print(f"⏭️  Pomijam anonimizację (blur wyłączony): {filepath}")
+                    self.tasks_processed += 1
+                
+                # ZAWSZE zapisz do bazy danych (niezależnie od blur)
+                # Jeśli blur=False, zapisujemy oryginalny plik
+                # Jeśli blur=True, zapisujemy zanonimizowany plik
+                self._save_to_database(filepath, confidence)
+                
+                # KLUCZOWY WARUNEK: Sprawdź czy SMS notifications są włączone
+                if self.settings.get('sms_notifications', False):
+                    print(f"📲 SMS notifications włączone - uruchamiam wysyłkę w tle")
+                    # Uruchom w osobnym wątku aby nie blokować pętli run
+                    notification_thread = threading.Thread(
+                        target=self._handle_cloud_notification,
+                        args=(filepath, confidence),
+                        daemon=True
+                    )
+                    notification_thread.start()
+                else:
+                    print(f"📵 SMS notifications wyłączone - pomijam wysyłkę")
                 
                 self.detection_queue.task_done()
                 
@@ -654,6 +742,157 @@ class AnonymizerWorker(threading.Thread):
                     pass
         
         print(f"🛑 AnonymizerWorker zakończył (zadania: {self.tasks_processed}, osoby: {self.persons_anonymized})")
+    
+    def _upload_to_google_drive(self, filepath):
+        """
+        Wysyła plik na Google Drive i ustawia uprawnienia publiczne.
+        
+        Args:
+            filepath: Ścieżka do pliku
+            
+        Returns:
+            webViewLink (str) lub None jeśli błąd
+        """
+        try:
+            if self.drive_service is None:
+                print("❌ Google Drive API nie jest zainicjalizowane")
+                return None
+            
+            filename = os.path.basename(filepath)
+            
+            # Metadata pliku
+            file_metadata = {
+                'name': filename,
+                'mimeType': 'image/jpeg'
+            }
+            
+            # Jeśli mamy folder ID, dodaj do metadata
+            if self.drive_folder_id:
+                file_metadata['parents'] = [self.drive_folder_id]
+            
+            # Upload pliku
+            media = MediaFileUpload(filepath, mimetype='image/jpeg', resumable=True)
+            
+            print(f"☁️  Wysyłanie {filename} na Google Drive...")
+            file = self.drive_service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, webViewLink',
+                supportsAllDrives=True  # Wymagane dla Shared Drive
+            ).execute()
+            
+            file_id = file.get('id')
+            web_view_link = file.get('webViewLink')
+            
+            print(f"✅ Plik wysłany na Drive: {file_id}")
+            print(f"🔗 Link (prywatny): {web_view_link}")
+            
+            return web_view_link
+            
+        except Exception as e:
+            print(f"❌ Błąd wysyłania na Google Drive: {e}")
+            return None
+    
+    def _send_sms_notification(self, public_link, confidence):
+        """
+        Wysyła powiadomienie SMS przez Vonage (Nexmo).
+        
+        Args:
+            public_link: Link do pliku na Google Drive (lub None jeśli upload się nie powiódł)
+            confidence: Pewność detekcji
+            
+        Returns:
+            True jeśli sukces, False w przeciwnym razie
+        """
+        try:
+            if self.vonage_sms is None:
+                print("❌ Klient Vonage nie jest zainicjalizowany")
+                return False
+            
+            # Przygotuj treść wiadomości
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            if public_link:
+                message_body = (
+                    f"Phone Detection Alert!\n"
+                    f"Time: {timestamp}\n"
+                    f"Location: Camera 1\n"
+                    f"Confidence: {confidence:.2%}\n"
+                    f"Image: {public_link}"
+                )
+            else:
+                # Wyślij SMS bez linku jeśli Google Drive zawiódł
+                message_body = (
+                    f"Phone Detection Alert!\n"
+                    f"Time: {timestamp}\n"
+                    f"Location: Camera 1\n"
+                    f"Confidence: {confidence:.2%}\n"
+                    f"(Image upload failed)"
+                )
+            
+            # Vonage wymaga numeru bez '+' i jako string
+            to_number = self.vonage_to_number.replace('+', '')
+            
+            print(f"📱 Wysyłanie SMS na +{to_number}...")
+            
+            # Stwórz obiekt SmsMessage (Vonage v4 API)
+            sms_message = SmsMessage(
+                to=to_number,
+                from_=self.vonage_from_number,
+                text=message_body
+            )
+            
+            # Wyślij SMS przez Vonage v4
+            response = self.vonage_sms.send(sms_message)
+            
+            # Sprawdź odpowiedź
+            if response and hasattr(response, 'messages'):
+                if response.messages[0].status == '0':
+                    message_id = response.messages[0].message_id
+                    print(f"✅ SMS wysłany: {message_id}")
+                    return True
+                else:
+                    error = getattr(response.messages[0], 'error_text', 'Unknown error')
+                    print(f"❌ Błąd Vonage: {error}")
+                    return False
+            else:
+                print(f"❌ Nieprawidłowa odpowiedź Vonage: {response}")
+                return False
+            
+        except Exception as e:
+            print(f"❌ Błąd wysyłania SMS: {e}")
+            return False
+    
+    def _handle_cloud_notification(self, filepath, confidence):
+        """
+        Orkiestrator powiadomień - upload na Drive i wysyłka SMS.
+        
+        Args:
+            filepath: Ścieżka do pliku
+            confidence: Pewność detekcji
+        """
+        try:
+            print(f"🚀 Rozpoczynam wysyłkę powiadomienia dla: {filepath}")
+            
+            # 1. Próbuj upload na Google Drive (opcjonalnie)
+            public_link = self._upload_to_google_drive(filepath)
+            
+            if public_link is None:
+                print("⚠️  Nie udało się wysłać na Drive, ale wyślę SMS bez linku")
+            
+            # 2. Wyślij SMS (z linkiem lub bez)
+            success = self._send_sms_notification(public_link, confidence)
+            
+            if success:
+                if public_link:
+                    print(f"✅ SMS wysłany z linkiem do zdjęcia!")
+                else:
+                    print(f"✅ SMS wysłany (bez linku - problem z Google Drive)")
+            else:
+                print(f"❌ Nie udało się wysłać SMS")
+                
+        except Exception as e:
+            print(f"❌ Błąd w _handle_cloud_notification: {e}")
     
     def _anonymize_faces(self, image_path):
         """

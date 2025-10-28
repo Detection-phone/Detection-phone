@@ -178,7 +178,7 @@ def get_settings():
         'available_cameras': available_cameras,
         'notifications': {
             'email': True,
-            'sms': False
+            'sms': camera_controller.settings.get('sms_notifications', False)
         }
     })
 
@@ -203,6 +203,10 @@ def update_settings():
             camera_settings['camera_index'] = int(data['camera_index'])
         if 'camera_name' in data:
             camera_settings['camera_name'] = data['camera_name']
+        
+        # Handle SMS notifications
+        if 'notifications' in data and 'sms' in data['notifications']:
+            camera_settings['sms_notifications'] = data['notifications']['sms']
         
         print(f"Updating camera controller with settings: {camera_settings}")
         camera_controller.update_settings(camera_settings)
