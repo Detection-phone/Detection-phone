@@ -5,12 +5,16 @@ A modern web application for detecting and managing phone usage in restricted ar
 ## Features
 
 - Real-time phone detection using YOLOv8
-- Modern, responsive dashboard
+- Face blurring for privacy (anonymizes upper body)
+- Modern, responsive web dashboard
 - Detection history and management
-- Configurable camera settings
-- Multiple notification channels (Email, SMS, Telegram)
-- Google Drive integration for storage
+- Configurable camera settings and schedules
+- **Multiple notification channels:**
+  - **Email** notifications with image attachment (via Yagmail)
+  - **SMS** notifications with image link (via Vonage)
+- Cloudinary integration for cloud image storage
 - User authentication and authorization
+- Offline processing queue for non-blocking detection
 
 ## Project Structure
 
@@ -57,11 +61,39 @@ src/
 
 The system can be configured through the Settings page:
 
-- Camera schedule
-- Face blurring
+- Camera schedule (start/end time)
+- Face blurring (privacy protection)
 - Detection confidence threshold
-- Notification channels
-- Storage settings
+- Notification channels (Email, SMS)
+- Camera selection
+
+### Notification Setup
+
+For detailed setup instructions:
+- **Email Notifications**: See [EMAIL_NOTIFICATIONS_SETUP.md](EMAIL_NOTIFICATIONS_SETUP.md)
+- **SMS Notifications**: See [SMS_NOTIFICATIONS_SETUP.md](SMS_NOTIFICATIONS_SETUP.md)
+
+### Environment Variables
+
+Create a `.env` file in the project root:
+
+```env
+# Email Configuration
+GMAIL_USER=your_email@gmail.com
+GMAIL_APP_PASSWORD=your_16_char_app_password
+EMAIL_RECIPIENT=recipient@example.com
+
+# Cloudinary Configuration
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_api_key
+CLOUDINARY_API_SECRET=your_api_secret
+
+# SMS Configuration (Optional)
+VONAGE_API_KEY=your_vonage_key
+VONAGE_API_SECRET=your_vonage_secret
+VONAGE_FROM_NUMBER=PhoneDetection
+VONAGE_TO_NUMBER=48123456789
+```
 
 ## Development
 
@@ -74,11 +106,13 @@ The system can be configured through the Settings page:
 
 ### Backend
 
-- Flask server
+- Flask server with SQLAlchemy ORM
 - SQLite database
-- YOLOv8 for detection
-- Google Drive API integration
-- Vonage API for SMS
+- YOLOv8 for phone and person detection
+- Cloudinary for image hosting
+- Vonage API for SMS notifications
+- Yagmail for email notifications
+- Threaded processing for non-blocking operations
 
 ## Security
 

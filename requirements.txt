@@ -12,4 +12,5 @@ python-jose==3.3.0
 Pillow==10.2.0
 numpy==1.26.4
 torch==2.0.1
-torchvision==0.15.2 
+torchvision==0.15.2
+yagmail==0.15.293 

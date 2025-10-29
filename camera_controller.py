@@ -11,9 +11,10 @@ import json
 import subprocess
 import re
 import numpy as np
+import textwrap
 from dotenv import load_dotenv
 
-# Load environment variables (Vonage, Cloudinary)
+# Load environment variables from .env file (Email, Cloudinary, Vonage)
 load_dotenv()
 
 # MediaPipe nie wspiera Python 3.13 - używamy OpenCV DNN jako alternatywy
@@ -26,6 +27,8 @@ from vonage_http_client import HttpClient
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
+import yagmail
+import smtplib
 
 class CameraController:
     def __init__(self, camera_index=0, camera_name=None):
@@ -54,8 +57,9 @@ class CameraController:
             'blur_faces': True,  # Kontroluje czy AnonymizerWorker działa (offline blur)
             'confidence_threshold': 0.2,
             'camera_index': self.camera_index,
-            'camera_name': camera_name,
-            'sms_notifications': False  # SMS notifications (Twilio + Google Drive)
+            'camera_name': camera_name if camera_name else 'Camera 1',
+            'sms_notifications': False,  # SMS notifications (Vonage + Cloudinary)
+            'email_notifications': False  # Email notifications (Yagmail + Cloudinary)
         }
         self.detection_queue = Queue()
         
@@ -185,8 +189,21 @@ class CameraController:
             self.camera_index = settings['camera_index']
             self._verify_camera()
         
-        # Update settings
-        self.settings.update(settings)
+        # Chroń camera_name przed nadpisaniem na None
+        new_camera_name = settings.get('camera_name')
+        
+        if new_camera_name:
+            # Jeśli jest nowa nazwa, użyj jej
+            self.settings['camera_name'] = new_camera_name
+        elif 'camera_name' not in self.settings:
+            # Jeśli nie ma nowej i nie ma starej, ustaw domyślną
+            self.settings['camera_name'] = 'Camera 1'
+        # Jeśli nie ma nowej, ale jest stara, NIE RÓB NIC (zostaw starą)
+        
+        # Zaktualizuj resztę ustawień, pomijając camera_name (już obsłużone)
+        settings_to_update = {k: v for k, v in settings.items() if k != 'camera_name'}
+        self.settings.update(settings_to_update)
+        
         print(f"Updated settings: {self.settings}")
         
         # Check schedule and update camera state
@@ -678,6 +695,29 @@ class AnonymizerWorker(threading.Thread):
         except Exception as e:
             print(f"❌ Błąd inicjalizacji Cloudinary: {e}")
             self.cloudinary_enabled = False
+        
+        # Inicjalizacja Email (yagmail)
+        print("📧 Inicjalizacja Yagmail (Email)...")
+        try:
+            # Pobierz dane logowania z zmiennych środowiskowych (.env)
+            self.email_user = os.environ.get("GMAIL_USER")
+            self.email_password = os.environ.get("GMAIL_APP_PASSWORD")
+            self.email_recipient = os.environ.get("EMAIL_RECIPIENT")
+            
+            # Sprawdź czy wszystkie dane są dostępne
+            if not all([self.email_user, self.email_password, self.email_recipient]):
+                print("⚠️  Brak danych Email w zmiennych środowiskowych (.env)")
+                print("   Wymagane: GMAIL_USER, GMAIL_APP_PASSWORD, EMAIL_RECIPIENT")
+                self.yag_client = None
+            else:
+                # Inicjalizuj klienta Yagmail
+                self.yag_client = yagmail.SMTP(self.email_user, self.email_password)
+                print("✅ Klient Yagmail (Email) zainicjalizowany.")
+                print(f"   Wysyłka z: {self.email_user}")
+                print(f"   Odbiorca: {self.email_recipient}")
+        except Exception as e:
+            print(f"❌ Błąd inicjalizacji Yagmail: {e}")
+            self.yag_client = None
     
     def run(self):
         """Główna pętla workera - przetwarza zadania z kolejki"""
@@ -722,9 +762,18 @@ class AnonymizerWorker(threading.Thread):
                 # Jeśli blur=True, zapisujemy zanonimizowany plik
                 self._save_to_database(filepath, confidence)
                 
-                # KLUCZOWY WARUNEK: Sprawdź czy SMS notifications są włączone
-                if self.settings.get('sms_notifications', False):
-                    print(f"📲 SMS notifications włączone - uruchamiam wysyłkę w tle")
+                # KLUCZOWY WARUNEK: Sprawdź czy KTÓRYKOLWIEK rodzaj powiadomień jest włączony
+                sms_enabled = self.settings.get('sms_notifications', False)
+                email_enabled = self.settings.get('email_notifications', False)
+                
+                if sms_enabled or email_enabled:
+                    notification_types = []
+                    if sms_enabled:
+                        notification_types.append("SMS")
+                    if email_enabled:
+                        notification_types.append("Email")
+                    
+                    print(f"📲 Powiadomienia włączone ({', '.join(notification_types)}) - uruchamiam wysyłkę w tle")
                     # Uruchom w osobnym wątku aby nie blokować pętli run
                     notification_thread = threading.Thread(
                         target=self._handle_cloud_notification,
@@ -733,7 +782,7 @@ class AnonymizerWorker(threading.Thread):
                     )
                     notification_thread.start()
                 else:
-                    print(f"📵 SMS notifications wyłączone - pomijam wysyłkę")
+                    print(f"📵 Powiadomienia (Email/SMS) wyłączone - pomijam wysyłkę")
                 
                 self.detection_queue.task_done()
                 
@@ -859,9 +908,83 @@ class AnonymizerWorker(threading.Thread):
             print(f"❌ Błąd wysyłania SMS: {e}")
             return False
     
+    def _send_email_notification(self, public_link, filepath, confidence, location):
+        """
+        Wysyła powiadomienie e-mail przez Yagmail z osadzonym obrazem.
+        
+        Args:
+            public_link: Link do pliku na Cloudinary
+            filepath: Lokalna ścieżka do pliku (dla osadzenia i załącznika)
+            confidence: Pewność detekcji
+            location: Nazwa kamery/lokalizacji
+            
+        Returns:
+            True jeśli sukces, False w przeciwnym razie
+        """
+        if not self.yag_client:
+            print("⚠️ Klient Yagmail nie jest skonfigurowany. Pomijam e-mail.")
+            return False
+        
+        # Sprawdź, czy adresat e-mail jest ustawiony (zapobiega błędowi RCPT first)
+        if not self.email_recipient:
+            print("⚠️ Brak adresata e-mail. Pomijam wysyłkę.")
+            return False
+        
+        try:
+            subject = f"Wykryto Telefon! ({location})"
+            
+            # --- Tworzenie treści z osadzonym obrazem ---
+            # yagmail.inline(filepath) stworzy tag <img> z obrazem osadzonym w e-mailu
+            
+            # Użyjemy listy stringów dla yagmail - automatycznie doda formatowanie
+            body_content = [
+                "<b>Wykryto Telefon!</b>",
+                "<hr>",
+                f"<b>Lokalizacja:</b> {location}",
+                f"<b>Pewność detekcji:</b> {confidence:.1f}%",
+                "<br>",
+                "Zanonimizowany obraz (osadzony poniżej i w załączniku):",
+                yagmail.inline(filepath)  # <-- Kluczowy element do osadzenia obrazu
+            ]
+            
+            # Opcjonalnie: dodaj link do Cloudinary
+            if public_link and public_link != "(Upload do Cloudinary nie powiódł się)":
+                body_content.append(f'<br><a href="{public_link}">Link do obrazu w chmurze</a>')
+            
+            # --- Koniec treści ---
+            
+            # Wysyłamy listę stringów - yagmail sam połączy je w HTML
+            self.yag_client.send(
+                to=self.email_recipient,
+                subject=subject,
+                contents=body_content,  # Wysyłamy listę
+                attachments=filepath  # Nadal wysyłamy jako oddzielny załącznik
+            )
+            # Log sukcesu
+            print(f"✅ Pomyślnie wysłano e-mail (z osadzonym obrazem) do {self.email_recipient}")
+            return True
+            
+        except smtplib.SMTPDataError as e:
+            # Specjalna obsługa "fałszywego" błędu 250 OK
+            if e.smtp_code == 250:
+                print(f"✅ E-mail prawdopodobnie wysłany (otrzymano kod 250 OK), ale wystąpił wyjątek: {e}")
+                return True  # Traktuj jako sukces
+            else:
+                print(f"❌ Błąd krytyczny wysyłania e-mail (Yagmail SMTPDataError): {e}")
+                import traceback
+                traceback.print_exc()
+                return False
+                
+        except Exception as e:
+            # Inne błędy
+            print(f"❌ Błąd krytyczny wysyłania e-mail (Yagmail): {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
     def _handle_cloud_notification(self, filepath, confidence):
         """
-        Orkiestrator powiadomień - upload na Cloudinary i wysyłka SMS.
+        Orkiestrator powiadomień - upload na Cloudinary i wysyłka SMS/Email.
         
         Args:
             filepath: Ścieżka do pliku
@@ -873,19 +996,55 @@ class AnonymizerWorker(threading.Thread):
             # 1. Próbuj upload na Cloudinary (opcjonalnie)
             public_link = self._upload_to_cloudinary(filepath)
             
-            if public_link is None:
-                print("⚠️  Nie udało się wysłać na Cloudinary, ale wyślę SMS bez linku")
-            
-            # 2. Wyślij SMS (z linkiem lub bez)
-            success = self._send_sms_notification(public_link, confidence)
-            
-            if success:
-                if public_link:
-                    print(f"✅ SMS wysłany z linkiem do zdjęcia!")
+            if public_link:
+                print(f"✅ Plik wysłany na Cloudinary")
+                
+                # 2. Wyślij SMS jeśli włączony
+                if self.settings.get('sms_notifications', False):
+                    print("📱 SMS notifications włączone - wysyłanie...")
+                    success = self._send_sms_notification(public_link, confidence)
+                    if success:
+                        print(f"✅ SMS wysłany z linkiem do zdjęcia!")
+                    else:
+                        print(f"❌ Nie udało się wysłać SMS")
                 else:
-                    print(f"✅ SMS wysłany (bez linku - problem z Cloudinary)")
+                    print("📵 SMS notifications wyłączone - pomijam SMS")
+                
+                # 3. Wyślij Email jeśli włączony
+                if self.settings.get('email_notifications', False):
+                    print("📧 Email notifications włączone - wysyłanie...")
+                    location = self.settings.get('camera_name', 'Camera 1')
+                    self._send_email_notification(
+                        public_link,
+                        filepath,
+                        confidence,
+                        location
+                    )
+                else:
+                    print("📭 Email notifications wyłączone - pomijam e-mail")
             else:
-                print(f"❌ Nie udało się wysłać SMS")
+                # Cloudinary zawiodło - wyślij powiadomienia bez linku
+                print("⚠️  Nie udało się wysłać na Cloudinary")
+                
+                if self.settings.get('sms_notifications', False):
+                    print("   ale wyślę SMS bez linku")
+                    success = self._send_sms_notification(None, confidence)
+                    if success:
+                        print(f"✅ SMS wysłany (bez linku)")
+                    else:
+                        print(f"❌ Nie udało się wysłać SMS")
+                
+                # Email z informacją o braku linku
+                if self.settings.get('email_notifications', False):
+                    print("📧 Email notifications włączone - wysyłanie (bez linku Cloudinary)...")
+                    location = self.settings.get('camera_name', 'Camera 1')
+                    # Wyślij z tekstem zamiast linku
+                    self._send_email_notification(
+                        "(Upload do Cloudinary nie powiódł się)",
+                        filepath,
+                        confidence,
+                        location
+                    )
                 
         except Exception as e:
             print(f"❌ Błąd w _handle_cloud_notification: {e}")
