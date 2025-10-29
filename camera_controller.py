@@ -696,8 +696,8 @@ class AnonymizerWorker(threading.Thread):
             print(f"❌ Błąd inicjalizacji Cloudinary: {e}")
             self.cloudinary_enabled = False
         
-        # Inicjalizacja Email (yagmail)
-        print("📧 Inicjalizacja Yagmail (Email)...")
+        # Inicjalizacja Email (yagmail) - przechowujemy tylko dane logowania
+        print("📧 Inicjalizacja danych Email (Yagmail)...")
         try:
             # Pobierz dane logowania z zmiennych środowiskowych (.env)
             self.email_user = os.environ.get("GMAIL_USER")
@@ -708,16 +708,13 @@ class AnonymizerWorker(threading.Thread):
             if not all([self.email_user, self.email_password, self.email_recipient]):
                 print("⚠️  Brak danych Email w zmiennych środowiskowych (.env)")
                 print("   Wymagane: GMAIL_USER, GMAIL_APP_PASSWORD, EMAIL_RECIPIENT")
-                self.yag_client = None
             else:
-                # Inicjalizuj klienta Yagmail
-                self.yag_client = yagmail.SMTP(self.email_user, self.email_password)
-                print("✅ Klient Yagmail (Email) zainicjalizowany.")
+                # NIE tworzymy połączenia tutaj - będzie tworzone przy każdej wysyłce
+                print("✅ Dane Email zainicjalizowane (połączenie będzie tworzone przy wysyłce).")
                 print(f"   Wysyłka z: {self.email_user}")
                 print(f"   Odbiorca: {self.email_recipient}")
         except Exception as e:
-            print(f"❌ Błąd inicjalizacji Yagmail: {e}")
-            self.yag_client = None
+            print(f"❌ Błąd inicjalizacji danych Email: {e}")
     
     def run(self):
         """Główna pętla workera - przetwarza zadania z kolejki"""
@@ -911,6 +908,7 @@ class AnonymizerWorker(threading.Thread):
     def _send_email_notification(self, public_link, filepath, confidence, location):
         """
         Wysyła powiadomienie e-mail przez Yagmail z osadzonym obrazem.
+        Tworzy nowe, świeże połączenie SMTP przy każdej wysyłce.
         
         Args:
             public_link: Link do pliku na Cloudinary
@@ -921,22 +919,15 @@ class AnonymizerWorker(threading.Thread):
         Returns:
             True jeśli sukces, False w przeciwnym razie
         """
-        if not self.yag_client:
-            print("⚠️ Klient Yagmail nie jest skonfigurowany. Pomijam e-mail.")
-            return False
-        
-        # Sprawdź, czy adresat e-mail jest ustawiony (zapobiega błędowi RCPT first)
-        if not self.email_recipient:
-            print("⚠️ Brak adresata e-mail. Pomijam wysyłkę.")
+        # Sprawdź, czy dane email są dostępne
+        if not all([self.email_user, self.email_password, self.email_recipient]):
+            print("⚠️ Brak danych Email. Pomijam wysyłkę.")
             return False
         
         try:
             subject = f"Wykryto Telefon! ({location})"
             
-            # --- Tworzenie treści z osadzonym obrazem ---
-            # yagmail.inline(filepath) stworzy tag <img> z obrazem osadzonym w e-mailu
-            
-            # Użyjemy listy stringów dla yagmail - automatycznie doda formatowanie
+            # --- Definicja Treści ---
             body_content = [
                 "<b>Wykryto Telefon!</b>",
                 "<hr>",
@@ -944,23 +935,24 @@ class AnonymizerWorker(threading.Thread):
                 f"<b>Pewność detekcji:</b> {confidence:.1f}%",
                 "<br>",
                 "Zanonimizowany obraz (osadzony poniżej i w załączniku):",
-                yagmail.inline(filepath)  # <-- Kluczowy element do osadzenia obrazu
+                yagmail.inline(filepath)  # Osadzenie obrazu
             ]
             
             # Opcjonalnie: dodaj link do Cloudinary
             if public_link and public_link != "(Upload do Cloudinary nie powiódł się)":
                 body_content.append(f'<br><a href="{public_link}">Link do obrazu w chmurze</a>')
             
-            # --- Koniec treści ---
+            # --- Nowa Logika Połączenia ---
+            # Tworzymy nowe, świeże połączenie przy każdej wysyłce
+            with yagmail.SMTP(self.email_user, self.email_password) as yag_client:
+                yag_client.send(
+                    to=self.email_recipient,
+                    subject=subject,
+                    contents=body_content,
+                    attachments=filepath
+                )
+            # Połączenie jest automatycznie zamykane po wyjściu z bloku "with"
             
-            # Wysyłamy listę stringów - yagmail sam połączy je w HTML
-            self.yag_client.send(
-                to=self.email_recipient,
-                subject=subject,
-                contents=body_content,  # Wysyłamy listę
-                attachments=filepath  # Nadal wysyłamy jako oddzielny załącznik
-            )
-            # Log sukcesu
             print(f"✅ Pomyślnie wysłano e-mail (z osadzonym obrazem) do {self.email_recipient}")
             return True
             
@@ -968,7 +960,7 @@ class AnonymizerWorker(threading.Thread):
             # Specjalna obsługa "fałszywego" błędu 250 OK
             if e.smtp_code == 250:
                 print(f"✅ E-mail prawdopodobnie wysłany (otrzymano kod 250 OK), ale wystąpił wyjątek: {e}")
-                return True  # Traktuj jako sukces
+                return True
             else:
                 print(f"❌ Błąd krytyczny wysyłania e-mail (Yagmail SMTPDataError): {e}")
                 import traceback
