@@ -113,6 +113,46 @@ def get_detections():
         'status': d.status
     } for d in detections])
 
+@app.route('/api/dashboard-stats', methods=['GET'])
+@login_required
+def get_dashboard_stats():
+    """Get real-time dashboard statistics"""
+    # Get all detections
+    all_detections = Detection.query.all()
+    total_detections = len(all_detections)
+    
+    # Get today's detections
+    today = datetime.now().date()
+    today_detections = Detection.query.filter(
+        db.func.date(Detection.timestamp) == today
+    ).count()
+    
+    # Get camera status
+    camera_status = 'Online' if camera_controller.is_running else 'Offline'
+    within_schedule = camera_controller._is_within_schedule()
+    
+    # Get recent detections (last 5)
+    recent_detections = Detection.query.order_by(
+        Detection.timestamp.desc()
+    ).limit(5).all()
+    
+    recent_detections_list = [{
+        'id': d.id,
+        'timestamp': d.timestamp.isoformat(),
+        'location': d.location,
+        'confidence': d.confidence,
+        'image_path': os.path.basename(d.image_path),
+        'status': d.status
+    } for d in recent_detections]
+    
+    return jsonify({
+        'total_detections': total_detections,
+        'today_detections': today_detections,
+        'camera_status': camera_status,
+        'within_schedule': within_schedule,
+        'recent_detections': recent_detections_list
+    })
+
 @app.route('/api/detections', methods=['POST'])
 @login_required
 def create_detection():

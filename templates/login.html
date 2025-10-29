@@ -1,24 +1,37 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="row justify-content-center">
+<div class="row justify-content-center" style="min-height: 70vh; align-items: center;">
     <div class="col-md-6 col-lg-4">
-        <div class="card shadow">
-            <div class="card-body">
-                <h3 class="card-title text-center mb-4">Login</h3>
+        <div class="card shadow-lg">
+            <div class="card-body p-5">
+                <div class="text-center mb-4">
+                    <i class="fas fa-mobile-alt fa-3x text-primary mb-3"></i>
+                    <h3 class="card-title">Phone Detection System</h3>
+                    <p class="text-muted">Login to your account</p>
+                </div>
                 <form id="loginForm" method="POST" action="/api/login">
                     <div class="mb-3">
-                        <label for="username" class="form-label">Username</label>
-                        <input type="text" class="form-control" id="username" name="username" required>
+                        <label for="username" class="form-label">
+                            <i class="fas fa-user me-2"></i>Username
+                        </label>
+                        <input type="text" class="form-control" id="username" name="username" required autofocus>
                     </div>
                     <div class="mb-3">
-                        <label for="password" class="form-label">Password</label>
+                        <label for="password" class="form-label">
+                            <i class="fas fa-lock me-2"></i>Password
+                        </label>
                         <input type="password" class="form-control" id="password" name="password" required>
                     </div>
-                    <div class="d-grid">
-                        <button type="submit" class="btn btn-primary">Login</button>
+                    <div class="d-grid mt-4">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="fas fa-sign-in-alt me-2"></i>Login
+                        </button>
                     </div>
                 </form>
+                <div id="loginError" class="alert alert-danger mt-3 d-none" role="alert">
+                    Invalid username or password
+                </div>
             </div>
         </div>
     </div>
@@ -29,6 +42,15 @@
 <script>
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
+    
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    const errorDiv = document.getElementById('loginError');
+    const originalBtnText = submitBtn.innerHTML;
+    
+    // Show loading state
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Logging in...';
+    errorDiv.classList.add('d-none');
     
     const formData = {
         username: document.getElementById('username').value,
@@ -47,13 +69,28 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         const data = await response.json();
         
         if (response.ok) {
-            window.location.href = '/dashboard';
+            submitBtn.innerHTML = '<i class="fas fa-check me-2"></i>Success!';
+            submitBtn.classList.add('btn-success');
+            setTimeout(() => {
+                window.location.href = '/dashboard';
+            }, 500);
         } else {
-            alert(data.message || 'Login failed');
+            errorDiv.textContent = data.message || 'Invalid username or password';
+            errorDiv.classList.remove('d-none');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalBtnText;
+            
+            // Shake animation for error
+            const form = document.getElementById('loginForm');
+            form.classList.add('shake');
+            setTimeout(() => form.classList.remove('shake'), 500);
         }
     } catch (error) {
         console.error('Error:', error);
-        alert('An error occurred during login');
+        errorDiv.textContent = 'An error occurred during login. Please try again.';
+        errorDiv.classList.remove('d-none');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalBtnText;
     }
 });
 </script>

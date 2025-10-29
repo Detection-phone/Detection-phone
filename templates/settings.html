@@ -4,24 +4,33 @@
 <div class="row">
     <div class="col-12">
         <div class="card">
-            <div class="card-header">
-                <h5 class="card-title mb-0">System Settings</h5>
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-cog me-2"></i>System Settings
+                </h5>
+                <span class="badge bg-info">Configuration</span>
             </div>
             <div class="card-body">
                 <form id="settingsForm">
                     <!-- Camera Schedule -->
-                    <div class="mb-4">
-                        <h6>Camera Schedule</h6>
+                    <div class="mb-4 p-3 border border-secondary rounded">
+                        <h6 class="mb-3">
+                            <i class="fas fa-clock me-2 text-primary"></i>Camera Schedule
+                        </h6>
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label for="cameraStartTime" class="form-label">Start Time</label>
+                                    <label for="cameraStartTime" class="form-label">
+                                        <i class="fas fa-play-circle me-1"></i>Start Time
+                                    </label>
                                     <input type="time" class="form-control" id="cameraStartTime" name="camera_start_time">
                                 </div>
                             </div>
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label for="cameraEndTime" class="form-label">End Time</label>
+                                    <label for="cameraEndTime" class="form-label">
+                                        <i class="fas fa-stop-circle me-1"></i>End Time
+                                    </label>
                                     <input type="time" class="form-control" id="cameraEndTime" name="camera_end_time">
                                 </div>
                             </div>
@@ -29,18 +38,25 @@
                     </div>
 
                     <!-- Detection Settings -->
-                    <div class="mb-4">
-                        <h6>Detection Settings</h6>
+                    <div class="mb-4 p-3 border border-secondary rounded">
+                        <h6 class="mb-3">
+                            <i class="fas fa-radar me-2 text-warning"></i>Detection Settings
+                        </h6>
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label for="confidenceThreshold" class="form-label">Confidence Threshold</label>
+                                    <label for="confidenceThreshold" class="form-label">
+                                        <i class="fas fa-percentage me-1"></i>Confidence Threshold
+                                    </label>
                                     <input type="range" class="form-range" id="confidenceThreshold" name="confidence_threshold" min="0" max="100" step="1">
-                                    <div class="text-center" id="confidenceValue">50%</div>
+                                    <div class="text-center fw-bold text-primary" id="confidenceValue">50%</div>
                                 </div>
                             </div>
                             <div class="col-md-6">
                                 <div class="mb-3">
+                                    <label class="form-label">
+                                        <i class="fas fa-user-shield me-1"></i>Privacy Settings
+                                    </label>
                                     <div class="form-check form-switch">
                                         <input class="form-check-input" type="checkbox" id="blurFaces" name="blur_faces">
                                         <label class="form-check-label" for="blurFaces">Blur Faces in Images</label>
@@ -51,30 +67,50 @@
                     </div>
 
                     <!-- Notification Settings -->
-                    <div class="mb-4">
-                        <h6>Notification Settings</h6>
-                        <div class="form-check form-switch d-inline-block me-3">
+                    <div class="mb-4 p-3 border border-secondary rounded">
+                        <h6 class="mb-3">
+                            <i class="fas fa-bell me-2 text-success"></i>Notification Settings
+                        </h6>
+                        <div class="form-check form-switch mb-2">
                             <input class="form-check-input" type="checkbox" id="emailEnabled" name="notifications[email]">
-                            <label class="form-check-label" for="emailEnabled">Email Notifications</label>
+                            <label class="form-check-label" for="emailEnabled">
+                                <i class="fas fa-envelope me-1"></i>Email Notifications
+                            </label>
                         </div>
-                        <div class="form-check form-switch d-inline-block me-3">
+                        <div class="form-check form-switch">
                             <input class="form-check-input" type="checkbox" id="smsEnabled" name="notifications[sms]">
-                            <label class="form-check-label" for="smsEnabled">SMS Notifications</label>
+                            <label class="form-check-label" for="smsEnabled">
+                                <i class="fas fa-sms me-1"></i>SMS Notifications
+                            </label>
                         </div>
                     </div>
 
-                    <div class="settings-section">
-                        <h3>Camera Selection</h3>
+                    <!-- Camera Selection -->
+                    <div class="mb-4 p-3 border border-secondary rounded">
+                        <h6 class="mb-3">
+                            <i class="fas fa-video me-2 text-info"></i>Camera Selection
+                        </h6>
                         <div class="form-group">
-                            <label for="camera-select">Select Camera:</label>
-                            <select id="camera-select" class="form-control">
+                            <label for="camera-select" class="form-label">
+                                <i class="fas fa-camera me-1"></i>Select Camera Device:
+                            </label>
+                            <select id="camera-select" class="form-control form-select">
                                 <!-- Will be populated dynamically -->
                             </select>
                         </div>
                     </div>
 
-                    <div class="text-end">
-                        <button type="submit" class="btn btn-primary">Save Settings</button>
+                    <div class="text-end mt-4">
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            <i class="fas fa-save me-2"></i>Save Settings
+                        </button>
+                    </div>
+                    
+                    <div id="settingsSuccess" class="alert alert-success mt-3 d-none" role="alert">
+                        <i class="fas fa-check-circle me-2"></i>Settings saved successfully!
+                    </div>
+                    <div id="settingsError" class="alert alert-danger mt-3 d-none" role="alert">
+                        <i class="fas fa-exclamation-circle me-2"></i>Error saving settings. Please try again.
                     </div>
                 </form>
             </div>
@@ -130,6 +166,17 @@ document.getElementById('confidenceThreshold').addEventListener('input', (e) => 
 document.getElementById('settingsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    const successDiv = document.getElementById('settingsSuccess');
+    const errorDiv = document.getElementById('settingsError');
+    const originalBtnText = submitBtn.innerHTML;
+    
+    // Show loading state
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Saving...';
+    successDiv.classList.add('d-none');
+    errorDiv.classList.add('d-none');
+    
     const formData = {
         camera_start_time: document.getElementById('cameraStartTime').value,
         camera_end_time: document.getElementById('cameraEndTime').value,
@@ -152,13 +199,22 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
         });
 
         if (response.ok) {
-            alert('Settings saved successfully');
+            submitBtn.innerHTML = '<i class="fas fa-check me-2"></i>Saved!';
+            successDiv.classList.remove('d-none');
+            setTimeout(() => {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = originalBtnText;
+            }, 2000);
         } else {
-            alert('Error saving settings');
+            errorDiv.classList.remove('d-none');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalBtnText;
         }
     } catch (error) {
         console.error('Error:', error);
-        alert('An error occurred while saving settings');
+        errorDiv.classList.remove('d-none');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalBtnText;
     }
 });
 

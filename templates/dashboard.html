@@ -67,16 +67,38 @@ function formatDate(dateString) {
     return date.toLocaleString();
 }
 
-// Function to load detections
-async function loadDetections() {
+// Function to update dashboard stats
+async function updateDashboardStats() {
     try {
-        const response = await fetch('/api/detections');
-        const detections = await response.json();
+        const response = await fetch('/api/dashboard-stats');
+        const data = await response.json();
         
+        // Update statistics cards
+        document.getElementById('totalDetections').textContent = data.total_detections;
+        document.getElementById('todayDetections').textContent = data.today_detections;
+        
+        // Update camera status with color
+        const statusElement = document.getElementById('cameraStatus');
+        statusElement.textContent = data.camera_status;
+        
+        // Update the parent card color based on status
+        const statusCard = statusElement.closest('.card');
+        if (data.camera_status === 'Online') {
+            statusCard.classList.remove('bg-warning', 'bg-danger');
+            statusCard.classList.add('bg-success');
+        } else if (data.within_schedule) {
+            statusCard.classList.remove('bg-success', 'bg-danger');
+            statusCard.classList.add('bg-warning');
+        } else {
+            statusCard.classList.remove('bg-success', 'bg-warning');
+            statusCard.classList.add('bg-info');
+        }
+        
+        // Update recent detections table
         const tableBody = document.getElementById('detectionsTable');
         tableBody.innerHTML = '';
         
-        detections.forEach(detection => {
+        data.recent_detections.forEach(detection => {
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td>${formatDate(detection.timestamp)}</td>
@@ -91,17 +113,14 @@ async function loadDetections() {
             `;
             tableBody.appendChild(row);
         });
-
-        // Update statistics
-        document.getElementById('totalDetections').textContent = detections.length;
-        const todayDetections = detections.filter(d => {
-            const detectionDate = new Date(d.timestamp);
-            const today = new Date();
-            return detectionDate.toDateString() === today.toDateString();
-        }).length;
-        document.getElementById('todayDetections').textContent = todayDetections;
+        
+        // Add subtle animation to indicate update
+        document.querySelectorAll('.card').forEach(card => {
+            card.style.transition = 'all 0.3s ease';
+        });
+        
     } catch (error) {
-        console.error('Error loading detections:', error);
+        console.error('Error updating dashboard stats:', error);
     }
 }
 
@@ -110,10 +129,10 @@ function viewImage(imagePath) {
     window.open(`/detections/${imagePath}`, '_blank');
 }
 
-// Load detections when page loads
-document.addEventListener('DOMContentLoaded', loadDetections);
+// Load stats when page loads
+document.addEventListener('DOMContentLoaded', updateDashboardStats);
 
-// Refresh detections every 30 seconds
-setInterval(loadDetections, 30000);
+// Refresh dashboard stats every 3 seconds
+setInterval(updateDashboardStats, 3000);
 </script>
 {% endblock %} 
