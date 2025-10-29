@@ -13,19 +13,19 @@ import re
 import numpy as np
 from dotenv import load_dotenv
 
-# Load environment variables (Twilio, Google Drive)
+# Load environment variables (Vonage, Cloudinary)
 load_dotenv()
 
 # MediaPipe nie wspiera Python 3.13 - używamy OpenCV DNN jako alternatywy
 
-# Imports for SMS notifications and Google Drive
+# Imports for SMS notifications and Cloudinary
 from vonage import Auth
 from vonage_sms import Sms
 from vonage_sms.requests import SmsMessage
 from vonage_http_client import HttpClient
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 
 class CameraController:
     def __init__(self, camera_index=0, camera_name=None):
@@ -655,26 +655,29 @@ class AnonymizerWorker(threading.Thread):
             print(f"❌ Błąd inicjalizacji Vonage: {e}")
             self.vonage_sms = None
         
-        # Inicjalizacja Google Drive API
-        print("☁️  Inicjalizacja Google Drive API...")
+        # Inicjalizacja Cloudinary
+        print("☁️  Inicjalizacja Cloudinary...")
         try:
-            service_account_file = 'service_account.json'
-            if os.path.exists(service_account_file):
-                scopes = ['https://www.googleapis.com/auth/drive.file']
-                credentials = service_account.Credentials.from_service_account_file(
-                    service_account_file, scopes=scopes
+            cloudinary_cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME')
+            cloudinary_api_key = os.getenv('CLOUDINARY_API_KEY')
+            cloudinary_api_secret = os.getenv('CLOUDINARY_API_SECRET')
+            
+            if all([cloudinary_cloud_name, cloudinary_api_key, cloudinary_api_secret]):
+                cloudinary.config(
+                    cloud_name=cloudinary_cloud_name,
+                    api_key=cloudinary_api_key,
+                    api_secret=cloudinary_api_secret,
+                    secure=True
                 )
-                self.drive_service = build('drive', 'v3', credentials=credentials)
-                # ID folderu na Shared Drive (Google Workspace)
-                self.drive_folder_id = "0AKO-cqj6Qbv8Uk9PVA"
-                print("✅ Google Drive API zainicjalizowane")
-                print(f"   Shared Drive Folder ID: {self.drive_folder_id}")
+                self.cloudinary_enabled = True
+                print("✅ Cloudinary zainicjalizowane")
+                print(f"   Cloud Name: {cloudinary_cloud_name}")
             else:
-                self.drive_service = None
-                print(f"⚠️  Brak pliku {service_account_file}")
+                self.cloudinary_enabled = False
+                print("⚠️  Brak danych Cloudinary w zmiennych środowiskowych")
         except Exception as e:
-            print(f"❌ Błąd inicjalizacji Google Drive: {e}")
-            self.drive_service = None
+            print(f"❌ Błąd inicjalizacji Cloudinary: {e}")
+            self.cloudinary_enabled = False
     
     def run(self):
         """Główna pętla workera - przetwarza zadania z kolejki"""
@@ -743,54 +746,45 @@ class AnonymizerWorker(threading.Thread):
         
         print(f"🛑 AnonymizerWorker zakończył (zadania: {self.tasks_processed}, osoby: {self.persons_anonymized})")
     
-    def _upload_to_google_drive(self, filepath):
+    def _upload_to_cloudinary(self, filepath):
         """
-        Wysyła plik na Google Drive i ustawia uprawnienia publiczne.
+        Wysyła plik na Cloudinary i zwraca publiczny link.
         
         Args:
             filepath: Ścieżka do pliku
             
         Returns:
-            webViewLink (str) lub None jeśli błąd
+            secure_url (str) lub None jeśli błąd
         """
         try:
-            if self.drive_service is None:
-                print("❌ Google Drive API nie jest zainicjalizowane")
+            if not self.cloudinary_enabled:
+                print("❌ Cloudinary nie jest zainicjalizowane")
                 return None
             
             filename = os.path.basename(filepath)
             
-            # Metadata pliku
-            file_metadata = {
-                'name': filename,
-                'mimeType': 'image/jpeg'
-            }
+            print(f"☁️  Wysyłanie {filename} na Cloudinary...")
             
-            # Jeśli mamy folder ID, dodaj do metadata
-            if self.drive_folder_id:
-                file_metadata['parents'] = [self.drive_folder_id]
+            # Upload pliku na Cloudinary
+            response = cloudinary.uploader.upload(
+                filepath,
+                folder="phone_detections",  # Folder w Cloudinary
+                public_id=os.path.splitext(filename)[0],  # Nazwa bez rozszerzenia
+                resource_type="image",
+                overwrite=True
+            )
             
-            # Upload pliku
-            media = MediaFileUpload(filepath, mimetype='image/jpeg', resumable=True)
+            # Pobierz secure URL (HTTPS)
+            secure_url = response.get('secure_url')
+            public_id = response.get('public_id')
             
-            print(f"☁️  Wysyłanie {filename} na Google Drive...")
-            file = self.drive_service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id, webViewLink',
-                supportsAllDrives=True  # Wymagane dla Shared Drive
-            ).execute()
+            print(f"✅ Plik wysłany na Cloudinary: {public_id}")
+            print(f"🔗 Link (publiczny): {secure_url}")
             
-            file_id = file.get('id')
-            web_view_link = file.get('webViewLink')
-            
-            print(f"✅ Plik wysłany na Drive: {file_id}")
-            print(f"🔗 Link (prywatny): {web_view_link}")
-            
-            return web_view_link
+            return secure_url
             
         except Exception as e:
-            print(f"❌ Błąd wysyłania na Google Drive: {e}")
+            print(f"❌ Błąd wysyłania na Cloudinary: {e}")
             return None
     
     def _send_sms_notification(self, public_link, confidence):
@@ -818,16 +812,18 @@ class AnonymizerWorker(threading.Thread):
                     f"Time: {timestamp}\n"
                     f"Location: Camera 1\n"
                     f"Confidence: {confidence:.2%}\n"
-                    f"Image: {public_link}"
+                    f"Image: {public_link}\n"
+                    f"---"  # Padding dla Vonage demo - chroni link przed [FREE SMS DEMO...]
                 )
             else:
-                # Wyślij SMS bez linku jeśli Google Drive zawiódł
+                # Wyślij SMS bez linku jeśli Cloudinary zawiódł
                 message_body = (
                     f"Phone Detection Alert!\n"
                     f"Time: {timestamp}\n"
                     f"Location: Camera 1\n"
                     f"Confidence: {confidence:.2%}\n"
-                    f"(Image upload failed)"
+                    f"(Image upload failed)\n"
+                    f"---"  # Padding dla Vonage demo
                 )
             
             # Vonage wymaga numeru bez '+' i jako string
@@ -865,7 +861,7 @@ class AnonymizerWorker(threading.Thread):
     
     def _handle_cloud_notification(self, filepath, confidence):
         """
-        Orkiestrator powiadomień - upload na Drive i wysyłka SMS.
+        Orkiestrator powiadomień - upload na Cloudinary i wysyłka SMS.
         
         Args:
             filepath: Ścieżka do pliku
@@ -874,11 +870,11 @@ class AnonymizerWorker(threading.Thread):
         try:
             print(f"🚀 Rozpoczynam wysyłkę powiadomienia dla: {filepath}")
             
-            # 1. Próbuj upload na Google Drive (opcjonalnie)
-            public_link = self._upload_to_google_drive(filepath)
+            # 1. Próbuj upload na Cloudinary (opcjonalnie)
+            public_link = self._upload_to_cloudinary(filepath)
             
             if public_link is None:
-                print("⚠️  Nie udało się wysłać na Drive, ale wyślę SMS bez linku")
+                print("⚠️  Nie udało się wysłać na Cloudinary, ale wyślę SMS bez linku")
             
             # 2. Wyślij SMS (z linkiem lub bez)
             success = self._send_sms_notification(public_link, confidence)
@@ -887,7 +883,7 @@ class AnonymizerWorker(threading.Thread):
                 if public_link:
                     print(f"✅ SMS wysłany z linkiem do zdjęcia!")
                 else:
-                    print(f"✅ SMS wysłany (bez linku - problem z Google Drive)")
+                    print(f"✅ SMS wysłany (bez linku - problem z Cloudinary)")
             else:
                 print(f"❌ Nie udało się wysłać SMS")
                 
