@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for
 from flask_cors import CORS
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from datetime import datetime
@@ -88,9 +88,15 @@ def login():
     
     return jsonify({'message': 'Invalid credentials'}), 401
 
+@app.route('/logout')
+@login_required
+def logout_page():
+    logout_user()
+    return redirect(url_for('index'))
+
 @app.route('/api/logout')
 @login_required
-def logout():
+def logout_api():
     logout_user()
     return jsonify({'message': 'Logout successful'})
 
