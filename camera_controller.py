@@ -93,13 +93,23 @@ class CameraController:
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
     def _open_capture(self, index):
-        """Open a cv2.VideoCapture with robust backend fallbacks.
+        """Open a cv2.VideoCapture STRICTLY for the selected index.
 
-        On Windows, prefer DirectShow to avoid MSMF grabFrame errors.
-        Fallback order: CAP_DSHOW -> default (MSMF on Win) -> CAP_V4L2 (for WSL/Linux).
+        Order:
+        1) Default backend (MSMF on Windows) - preferred for virtual cams like Iriun
+        2) DirectShow (CAP_DSHOW) as the only fallback for the SAME index
+        No other indices or backends are attempted here.
         """
-        cap = None
-        # Try DirectShow first (Windows)
+        # Try default backend first (MSMF on Windows)
+        cap = cv2.VideoCapture(index)
+        if cap is not None and cap.isOpened():
+            return cap
+        try:
+            cap.release()
+        except Exception:
+            pass
+
+        # Then try DirectShow for the SAME index
         try:
             cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
             if cap is not None and cap.isOpened():
@@ -112,38 +122,36 @@ class CameraController:
             except Exception:
                 pass
 
-        # Try default backend (MSMF on Windows)
-        cap = cv2.VideoCapture(index)
-        if cap is not None and cap.isOpened():
-            return cap
-        try:
-            cap.release()
-        except Exception:
-            pass
-
-        # Try V4L2 (mainly Linux)
-        try:
-            cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
-            if cap is not None and cap.isOpened():
-                return cap
-            if cap is not None:
-                cap.release()
-        except Exception:
-            try:
-                cap.release()
-            except Exception:
-                pass
-
         return None
 
-    def _capture_has_valid_frame(self, cap, warmup_reads=5):
-        """Read a few frames to ensure the capture delivers non-empty images."""
+    def _get_camera_name_by_index(self, index):
+        """Best-effort retrieval of camera device name for given index (Windows)."""
+        try:
+            cmd = (
+                "powershell -Command \"Get-CimInstance Win32_PnPEntity | "
+                "Where-Object { $_.PNPClass -eq 'Camera' } | "
+                f"Select-Object -Index {index} | Select-Object -ExpandProperty Name\""
+            )
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            if result.returncode == 0:
+                name = result.stdout.strip()
+                return name if name else None
+        except Exception:
+            pass
+        return None
+
+    def _capture_has_valid_frame(self, cap, warmup_reads=10, delay_s=0.1):
+        """Read a few frames to ensure the capture delivers non-empty images.
+
+        Some virtual cameras (e.g., Iriun) need a longer warm‑up before they
+        start delivering non-empty frames. Increase warmup count and delay.
+        """
         try:
             for _ in range(warmup_reads):
                 ret, frame = cap.read()
                 if ret and frame is not None and getattr(frame, 'size', 0) > 0:
                     return True
-                time.sleep(0.05)
+                time.sleep(delay_s)
         except Exception:
             pass
         return False
@@ -270,58 +278,103 @@ class CameraController:
         print("Schedule check thread ended")
 
     def start_camera(self):
-        """Start the camera and detection process"""
+        """Start the camera and detection process (STRICT selected index only)."""
         if self.is_running:
             print("Camera is already running")
             return
         
         try:
-            print(f"\nInitializing camera with index {self.camera_index}...")
-            # Try multiple times with fallback backends and alternative indices
-            attempts = 0
-            last_error = None
-            self.camera = None
-            candidate_indices = [self.camera_index]
-            try:
-                alt = [c['index'] for c in self.scan_available_cameras() if c['index'] != self.camera_index]
-                candidate_indices.extend(alt)
-            except Exception:
-                pass
+            # Resolve target by NAME first if provided (more stable than index mapping)
+            desired_name = self.settings.get('camera_name')
+            resolved_index = None
+            if desired_name:
+                try:
+                    for cam in self.scan_available_cameras():
+                        if desired_name.lower() in cam.get('name', '').lower():
+                            resolved_index = int(cam['index'])
+                            break
+                except Exception:
+                    resolved_index = None
 
-            for idx in candidate_indices:
-                attempts = 0
-                while attempts < 3:
-                    cap = self._open_capture(idx)
-                    if cap is not None and cap.isOpened() and self._capture_has_valid_frame(cap):
-                        self.camera_index = idx
-                        self.camera = cap
-                        attempts = 99
-                        break
-                    if cap is not None:
-                        try:
-                            cap.release()
-                        except Exception:
-                            pass
-                    attempts += 1
-                    last_error = f"Failed to open camera index {idx} on attempt {attempts}"
-                    time.sleep(0.3)
-                if self.camera is not None:
+            # Fall back to stored index if name not provided/found
+            if resolved_index is None:
+                resolved_index = int(self.settings.get('camera_index', self.camera_index))
+
+            self.camera_index = resolved_index
+            print(f"\nInitializing camera with STRICT index {self.camera_index} (desired='{desired_name}')...")
+
+            self.camera = None
+            last_error = None
+
+            # Try default backend (MSMF) first, then DSHOW, for the SAME index
+            for backend in ('default', 'dshow'):
+                if backend == 'default':
+                    cap = cv2.VideoCapture(self.camera_index)
+                else:
+                    cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+
+                if cap is not None and cap.isOpened() and self._capture_has_valid_frame(cap):
+                    self.camera = cap
                     break
 
+                # Release and record error
+                if cap is not None:
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                last_error = f"Failed to open STRICT camera index {self.camera_index} using backend {backend}"
+
+            # If still no camera, STOP and DO NOT attempt other indices
             if self.camera is None or not self.camera.isOpened():
                 if last_error:
                     print(last_error)
-                raise Exception(f"Failed to open camera with index {self.camera_index}")
+                print("Strict mode: not falling back to any other camera index.")
+                print("\n===============================================================")
+                print(f"[BŁĄD KRYTYCZNY] Nie można otworzyć kamery (Index: {self.camera_index})!")
+                print("PRZYCZYNA: Kamera jest prawdopodobnie UŻYWANA PRZEZ INNĄ APLIKACJĘ.")
+                print("ROZWIĄZANIE: Zamknij WSZYSTKIE inne programy, które mogą używać tej kamery")
+                print("(np. okno Ustawień Windows, klient Iriun, Zoom, OBS, Teams)")
+                print("i zrestartuj serwer.")
+                print("===============================================================\n")
+                self.is_running = False
+                self.camera = None
+                return
             
-            # Set higher resolution
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            # Optional assertion: verify that the opened device corresponds to desired_name
+            if desired_name:
+                opened_name = self._get_camera_name_by_index(self.camera_index)
+                if opened_name and desired_name.lower() not in opened_name.lower():
+                    # Do NOT stop; align internal settings to actual opened device to prevent confusion
+                    print(f"Device name mismatch: opened='{opened_name}', desired='{desired_name}'. Using opened device and updating settings.")
+                    self.settings['camera_name'] = opened_name
             
-            # Verify camera properties
+            # Configure codec and resolution with validation
+            try:
+                # Many virtual cams prefer MJPG on Windows
+                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            except Exception:
+                pass
+
+            # Try preferred resolutions in order, accept first that yields valid frames
+            preferred_res = [(1280, 720), (640, 480)]
+            applied = None
+            for w, h in preferred_res:
+                try:
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                except Exception:
+                    continue
+                # short warm-up to validate
+                if self._capture_has_valid_frame(self.camera, warmup_reads=5, delay_s=0.05):
+                    applied = (w, h)
+                    break
+
+            # Read back properties
             width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
             fps = self.camera.get(cv2.CAP_PROP_FPS)
-            print(f"Camera initialized successfully: {width}x{height} @ {fps} FPS")
+            print(f"Camera initialized successfully: {width}x{height} @ {fps} FPS (requested={applied})")
             
             self.is_running = True
             print(f"Camera started successfully with index {self.camera_index}")
@@ -932,7 +985,7 @@ class AnonymizerWorker(threading.Thread):
                 "<b>Wykryto Telefon!</b>",
                 "<hr>",
                 f"<b>Lokalizacja:</b> {location}",
-                f"<b>Pewność detekcji:</b> {confidence:.1f}%",
+                 f"<b>Pewność detekcji:</b> {(confidence * 100):.1f}%",
                 "<br>",
                 "Zanonimizowany obraz (osadzony poniżej i w załączniku):",
                 yagmail.inline(filepath)  # Osadzenie obrazu

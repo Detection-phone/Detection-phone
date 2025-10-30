@@ -328,12 +328,11 @@ def update_settings():
                 camera_settings['email_notifications'] = data['notifications']['email']
                 print(f"📧 Email notifications: {data['notifications']['email']}")
         
-        print(f"Updating camera controller with settings: {camera_settings}")
-        camera_controller.update_settings(camera_settings)
-        
-        # Check current camera status
-        print(f"Camera running: {camera_controller.is_running}")
-        print(f"Within schedule: {camera_controller._is_within_schedule()}")
+        print(f"Updating camera controller (settings only, no auto-start) with: {camera_settings}")
+        # ✅ Save-only: merge into controller settings without triggering auto-start/stop
+        for key, value in camera_settings.items():
+            camera_controller.settings[key] = value
+        # Do NOT call camera_controller.update_settings or any start/stop here
         
         return jsonify({
             'message': 'Settings updated successfully',
