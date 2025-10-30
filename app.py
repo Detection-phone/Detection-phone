@@ -100,7 +100,7 @@ def login():
         password = data.get('password')
         
         user = User.query.filter_by(username=username).first()
-        if user and user.password == password:  # In production, use proper password hashing
+        if user and user.check_password(password):
             login_user(user)
             next_page = request.args.get('next')
             if next_page:
@@ -125,7 +125,7 @@ def api_login():
     password = data.get('password')
     
     user = User.query.filter_by(username=username).first()
-    if user and user.password == password:  # In production, use proper password hashing
+    if user and user.check_password(password):
         login_user(user)
         return jsonify({'message': 'Login successful'})
     
@@ -144,7 +144,7 @@ def logout_api():
     return jsonify({'message': 'Logout successful'})
 
 @app.route('/api/detections', methods=['GET'])
-# @login_required  # ⚠️ TEMPORARILY DISABLED for CORS testing
+@login_required
 def get_detections():
     detections = Detection.query.order_by(Detection.timestamp.desc()).all()
     return jsonify([{
@@ -156,8 +156,30 @@ def get_detections():
         'status': d.status
     } for d in detections])
 
+@app.route('/api/detections/<int:detection_id>', methods=['GET'])
+@login_required
+def get_detection_detail(detection_id: int):
+    d = Detection.query.get_or_404(detection_id)
+    return jsonify({
+        'id': d.id,
+        'timestamp': d.timestamp.isoformat(),
+        'location': d.location,
+        'confidence': d.confidence,
+        'image_path': os.path.basename(d.image_path) if d.image_path else None,
+        'status': d.status,
+        'user_id': d.user_id
+    })
+
+@app.route('/api/detections/<int:detection_id>', methods=['DELETE'])
+@login_required
+def delete_detection(detection_id: int):
+    d = Detection.query.get_or_404(detection_id)
+    db.session.delete(d)
+    db.session.commit()
+    return jsonify({'message': 'Detection deleted successfully'})
+
 @app.route('/api/dashboard-stats', methods=['GET'])
-# @login_required  # ⚠️ TEMPORARILY DISABLED for CORS testing
+@login_required
 def get_dashboard_stats():
     """Get real-time dashboard statistics"""
     # Get all detections
@@ -278,7 +300,7 @@ def create_detection():
     return jsonify({'message': 'No phone detected'})
 
 @app.route('/api/settings', methods=['GET'])
-# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+@login_required
 def get_settings():
     # Get available cameras
     available_cameras = CameraController.scan_available_cameras()
@@ -298,7 +320,7 @@ def get_settings():
     })
 
 @app.route('/api/settings', methods=['POST'])
-# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+@login_required
 def update_settings():
     data = request.get_json()
     print("\nReceived settings update request")
@@ -346,7 +368,7 @@ def update_settings():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/camera/start', methods=['POST'])
-# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+@login_required
 def start_camera():
     """Manually start the camera (ignore schedule)"""
     try:
@@ -364,7 +386,7 @@ def start_camera():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/camera/stop', methods=['POST'])
-# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+@login_required
 def stop_camera():
     """Manually stop the camera"""
     try:
@@ -382,7 +404,7 @@ def stop_camera():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/camera/status', methods=['GET'])
-# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+@login_required
 def camera_status():
     """Get current camera status"""
     try:
@@ -401,7 +423,7 @@ def camera_status():
 
 # ✅ Serve detection images (secure endpoint with absolute path)
 @app.route('/detections/<path:filename>')
-# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+@login_required
 def serve_detection_image(filename):
     """
     Securely serve detection images from the detections folder.

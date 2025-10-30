@@ -9,7 +9,8 @@ def init_db():
         admin = User.query.filter_by(username='admin').first()
         if not admin:
             # Create admin user
-            admin = User(username='admin', password='admin123')
+            admin = User(username='admin')
+            admin.set_password('admin')
             db.session.add(admin)
             db.session.commit()
             print("Admin user created successfully!")

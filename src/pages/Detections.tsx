@@ -324,11 +324,11 @@ const Detections: React.FC = () => {
       renderCell: (params: GridRenderCellParams) => (
         <Box sx={{ width: '100%' }}>
           <Typography variant="caption" sx={{ mb: 0.5, display: 'block' }}>
-            {params.value.toFixed(1)}%
+            {(params.value * 100).toFixed(1)}%
           </Typography>
           <LinearProgress
             variant="determinate"
-            value={Math.min(params.value, 100)}
+            value={Math.min(params.value * 100, 100)}
             color={getConfidenceColor(params.value)}
           />
         </Box>
