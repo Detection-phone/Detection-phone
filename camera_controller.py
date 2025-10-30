@@ -68,6 +68,8 @@ class CameraController:
         self.anonymizer_worker = AnonymizerWorker(self.detection_queue, self.settings)
         self.anonymizer_worker.start()
         print("✅ AnonymizerWorker uruchomiony w tle")
+        # Manual stop guard – when True, scheduler must not auto-start the camera
+        self.manual_stop_engaged = False
         
         # Initialize YOLO model
         try:
@@ -270,10 +272,15 @@ class CameraController:
         """Thread to check when to start the camera based on schedule"""
         print("Starting schedule check thread...")
         while not self.is_running:
-            if self._is_within_schedule():
-                print("Schedule start time reached, starting camera...")
-                self.start_camera()
-                break
+            within = self._is_within_schedule()
+            if within:
+                if not self.manual_stop_engaged:
+                    print("Schedule start time reached, starting camera...")
+                    self.start_camera()
+                    break
+            else:
+                # Outside schedule – clear manual stop guard so next schedule can start
+                self.manual_stop_engaged = False
             time.sleep(1)  # Check every second
         print("Schedule check thread ended")
 
@@ -284,6 +291,8 @@ class CameraController:
             return
         
         try:
+            # Reset manual stop flag on explicit manual start
+            self.manual_stop_engaged = False
             # Resolve target by NAME first if provided (more stable than index mapping)
             desired_name = self.settings.get('camera_name')
             resolved_index = None
@@ -393,15 +402,39 @@ class CameraController:
                 self.camera = None
 
     def stop_camera(self):
-        """Stop the camera and cleanup resources"""
+        """Stop the camera and cleanup resources (GUI cleanup in main thread)."""
         print("\nStopping camera...")
+        # Engage manual stop so scheduler won't auto-start within current schedule window
+        self.manual_stop_engaged = True
         self.is_running = False
         
+        # Ask the worker thread to finish and wait briefly (non-blocking join)
+        if hasattr(self, 'camera_thread') and self.camera_thread is not None:
+            try:
+                self.camera_thread.join(timeout=1.0)
+            except Exception:
+                pass
+        
+        # Release capture if still open
         if self.camera is not None:
-            self.camera.release()
+            try:
+                self.camera.release()
+            except Exception:
+                pass
             self.camera = None
         
-        cv2.destroyAllWindows()
+        # Destroy OpenCV windows from the caller (main) thread
+        try:
+            try:
+                cv2.destroyWindow('Phone Detection')
+            except Exception:
+                cv2.destroyAllWindows()
+            # Let GUI process window teardown
+            for _ in range(5):
+                cv2.waitKey(1)
+        except Exception:
+            pass
+        
         print("Camera stopped")
         
         # Start schedule check thread for next schedule
@@ -467,10 +500,10 @@ class CameraController:
                 current_time = datetime.now().time()
                 end_time = datetime.strptime(self.settings['camera_end_time'], '%H:%M').time()
                 
-                # If current time is past end time, stop the camera
+                # If current time is past end time, request stop (do NOT call stop_camera from this thread)
                 if current_time > end_time:
-                    print(f"End time reached: {end_time}, stopping camera")
-                    self.stop_camera()
+                    print(f"End time reached: {end_time}, stopping camera (signal)")
+                    self.is_running = False
                     break
                 
                 ret, frame = self.camera.read()
@@ -546,6 +579,13 @@ class CameraController:
                 print(f"Error in camera loop: {e}")
                 time.sleep(1)
         
+        # Cleanup only capture here (no GUI operations in worker thread)
+        try:
+            if self.camera is not None:
+                self.camera.release()
+                self.camera = None
+        except Exception:
+            pass
         print("Camera loop ended")
 
     def __del__(self):
