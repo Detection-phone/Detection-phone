@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Grid,
@@ -6,9 +6,33 @@ import {
   Typography,
   Card,
   CardContent,
-  CardMedia,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  LinearProgress,
+  IconButton,
+  Avatar,
+  alpha,
+  CircularProgress,
+  Alert,
 } from '@mui/material';
 import {
+  TrendingUp,
+  TrendingDown,
+  Videocam,
+  Notifications,
+  Visibility,
+  Download,
+  PhonelinkRing,
+  LocationOn,
+} from '@mui/icons-material';
+import {
+  LineChart,
+  Line,
   BarChart,
   Bar,
   XAxis,
@@ -16,144 +40,367 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Legend,
+  Area,
+  AreaChart,
 } from 'recharts';
+import { dashboardAPI, DashboardStats } from '../services/api';
+import { handleDownloadImage } from '../utils/download';
 
-// Placeholder data
-const detectionData = [
-  { time: '00:00', count: 0 },
-  { time: '04:00', count: 2 },
-  { time: '08:00', count: 5 },
-  { time: '12:00', count: 8 },
-  { time: '16:00', count: 6 },
-  { time: '20:00', count: 3 },
-];
+// KPI Card Component
+interface KPICardProps {
+  title: string;
+  value: string | number;
+  change?: number;
+  icon: React.ReactNode;
+  color: string;
+}
 
-const recentDetections = [
-  {
-    id: 1,
-    timestamp: '2024-02-20 14:30:00',
-    image: 'https://via.placeholder.com/150',
-    confidence: 0.95,
-  },
-  {
-    id: 2,
-    timestamp: '2024-02-20 14:25:00',
-    image: 'https://via.placeholder.com/150',
-    confidence: 0.88,
-  },
-  {
-    id: 3,
-    timestamp: '2024-02-20 14:20:00',
-    image: 'https://via.placeholder.com/150',
-    confidence: 0.92,
-  },
-];
+const KPICard: React.FC<KPICardProps> = ({ title, value, change, icon, color }) => {
+  const isPositive = change !== undefined && change >= 0;
+
+  const [chartData, setChartData] = useState<Array<{ name: string; count: number }>>([]);
+
+  useEffect(() => {
+    const fetchChart = async () => {
+      try {
+        const res = await fetch('http://localhost:5000/api/stats/detections_over_time');
+        const data = await res.json();
+        setChartData(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.error('Failed to load chart data', e);
+      }
+    };
+    fetchChart();
+  }, []);
+
+  return (
+    <Card
+      sx={{
+        height: '100%',
+        background: (theme) =>
+          `linear-gradient(135deg, ${alpha(color, 0.1)} 0%, ${alpha(
+            color,
+            0.05
+          )} 100%)`,
+        border: (theme) => `1px solid ${alpha(color, 0.2)}`,
+        position: 'relative',
+        overflow: 'hidden',
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          top: 0,
+          right: 0,
+          width: '100px',
+          height: '100px',
+          background: `radial-gradient(circle, ${alpha(color, 0.2)} 0%, transparent 70%)`,
+          borderRadius: '50%',
+          transform: 'translate(30%, -30%)',
+        },
+      }}
+    >
+      <CardContent sx={{ position: 'relative', zIndex: 1 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+            {title}
+          </Typography>
+          <Avatar
+            sx={{
+              bgcolor: alpha(color, 0.2),
+              width: 40,
+              height: 40,
+            }}
+          >
+            {icon}
+          </Avatar>
+        </Box>
+        <Typography variant="h3" sx={{ fontWeight: 700, mb: 1, color }}>
+          {value}
+        </Typography>
+        {change !== undefined && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {isPositive ? (
+              <TrendingUp sx={{ fontSize: 18, color: 'success.main' }} />
+            ) : (
+              <TrendingDown sx={{ fontSize: 18, color: 'error.main' }} />
+            )}
+            <Typography
+              variant="caption"
+              sx={{
+                color: isPositive ? 'success.main' : 'error.main',
+                fontWeight: 600,
+              }}
+            >
+              {Math.abs(change)}% from last week
+            </Typography>
+          </Box>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
 
 const Dashboard: React.FC = () => {
+  // ✅ FIXED: Fetch real data from API
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [chartData, setChartData] = useState<Array<{ name: string; count: number }>>([]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const data = await dashboardAPI.getStats();
+        setStats(data);
+        console.log('✅ Dashboard data loaded:', data);
+        setError(null);
+      } catch (err: any) {
+        console.error('❌ Failed to fetch dashboard data:', err);
+        setError('Failed to load dashboard data. Please try again.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+    // fetch chart data
+    const fetchChart = async () => {
+      try {
+        const res = await fetch('http://localhost:5000/api/stats/detections_over_time');
+        const data = await res.json();
+        setChartData(Array.isArray(data) ? data : []);
+      } catch (e) {
+        console.error('Failed to load chart data', e);
+      }
+    };
+    fetchChart();
+    
+    // Refresh data every 30 seconds
+    const interval = setInterval(fetchData, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (loading && !stats) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
+        <CircularProgress size={60} />
+      </Box>
+    );
+  }
+
+  if (error && !stats) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="error">{error}</Alert>
+      </Box>
+    );
+  }
+
+  // Use fetched data or fallback to defaults
+  const totalDetections = stats?.total_detections ?? 0;
+  const todayDetections = stats?.today_detections ?? 0;
+  const cameraStatus = stats?.camera_status ?? 'Offline';
+  const notificationsSent = stats?.notifications_sent ?? 0;
+  const weeklyData = stats?.weekly_data ?? [];
+  const locationData = stats?.location_data ?? [];
+  const recentDetections = stats?.recent_detections ?? [];
+
   return (
     <Box sx={{ flexGrow: 1 }}>
       <Grid container spacing={3}>
-        {/* Statistics Cards */}
-        <Grid item xs={12} md={4}>
-          <Paper
-            sx={{
-              p: 2,
-              display: 'flex',
-              flexDirection: 'column',
-              height: 140,
-            }}
-          >
-            <Typography component="h2" variant="h6" color="primary" gutterBottom>
-              Total Detections Today
-            </Typography>
-            <Typography component="p" variant="h4">
-              24
-            </Typography>
-          </Paper>
+        {/* KPI Cards */}
+        <Grid item xs={12} sm={6} lg={4}>
+          <KPICard
+            title="Total Detections"
+            value={totalDetections}
+            change={12}
+            icon={<PhonelinkRing sx={{ color: '#3B82F6' }} />}
+            color="#3B82F6"
+          />
         </Grid>
-        <Grid item xs={12} md={4}>
-          <Paper
-            sx={{
-              p: 2,
-              display: 'flex',
-              flexDirection: 'column',
-              height: 140,
-            }}
-          >
-            <Typography component="h2" variant="h6" color="primary" gutterBottom>
-              Camera Status
-            </Typography>
-            <Typography component="p" variant="h4" color="success.main">
-              Active
-            </Typography>
-          </Paper>
+        <Grid item xs={12} sm={6} lg={4}>
+          <KPICard
+            title="Today's Detections"
+            value={todayDetections}
+            change={-8}
+            icon={<TrendingUp sx={{ color: '#10B981' }} />}
+            color="#10B981"
+          />
         </Grid>
-        <Grid item xs={12} md={4}>
-          <Paper
-            sx={{
-              p: 2,
-              display: 'flex',
-              flexDirection: 'column',
-              height: 140,
-            }}
-          >
-            <Typography component="h2" variant="h6" color="primary" gutterBottom>
-              Notifications Sent
+        <Grid item xs={12} sm={6} lg={4}>
+          <KPICard
+            title="Camera Status"
+            value={cameraStatus}
+            icon={<Videocam sx={{ color: cameraStatus === 'Active' ? '#10B981' : '#F59E0B' }} />}
+            color={cameraStatus === 'Active' ? '#10B981' : '#F59E0B'}
+          />
+        </Grid>
+
+        {/* Detections Over Time Chart */}
+        <Grid item xs={12} lg={8}>
+          <Paper sx={{ p: 3, height: '400px' }}>
+            <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>
+              Detections Over Time (Last 7 Days)
             </Typography>
-            <Typography component="p" variant="h4">
-              18
-            </Typography>
+            <ResponsiveContainer width="100%" height="85%">
+              <AreaChart data={chartData.length ? chartData : weeklyData}>
+                <defs>
+                  <linearGradient id="colorDetections" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                <XAxis
+                  dataKey={chartData.length ? 'name' : 'day'}
+                  stroke="#94A3B8"
+                  style={{ fontSize: '0.75rem' }}
+                />
+                <YAxis stroke="#94A3B8" style={{ fontSize: '0.75rem' }} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#1E293B',
+                    border: '1px solid #334155',
+                    borderRadius: '8px',
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey={chartData.length ? 'count' : 'detections'}
+                  stroke="#3B82F6"
+                  strokeWidth={2}
+                  fillOpacity={1}
+                  fill="url(#colorDetections)"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
           </Paper>
         </Grid>
 
-        {/* Detection Chart */}
-        <Grid item xs={12}>
-          <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
-            <Typography component="h2" variant="h6" color="primary" gutterBottom>
-              Detections by Hour
+        {/* Detections by Location Chart */}
+        <Grid item xs={12} lg={4}>
+          <Paper sx={{ p: 3, height: '400px' }}>
+            <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>
+              Detections by Location
             </Typography>
-            <div style={{ width: '100%', height: 300 }}>
-              <ResponsiveContainer>
-                <BarChart data={detectionData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="#1976d2" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <ResponsiveContainer width="100%" height="85%">
+              <BarChart data={locationData} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                <XAxis type="number" stroke="#94A3B8" style={{ fontSize: '0.75rem' }} />
+                <YAxis
+                  dataKey="location"
+                  type="category"
+                  width={100}
+                  stroke="#94A3B8"
+                  style={{ fontSize: '0.75rem' }}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#1E293B',
+                    border: '1px solid #334155',
+                    borderRadius: '8px',
+                  }}
+                />
+                <Bar dataKey="count" fill="#3B82F6" radius={[0, 8, 8, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </Paper>
         </Grid>
 
-        {/* Recent Detections */}
+        {/* Recent Detections Table */}
         <Grid item xs={12}>
-          <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
-            <Typography component="h2" variant="h6" color="primary" gutterBottom>
+          <Paper sx={{ p: 3 }}>
+            <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>
               Recent Detections
             </Typography>
-            <Grid container spacing={2}>
-              {recentDetections.map((detection) => (
-                <Grid item xs={12} sm={6} md={4} key={detection.id}>
-                  <Card>
-                    <CardMedia
-                      component="img"
-                      height="140"
-                      image={detection.image}
-                      alt={`Detection ${detection.id}`}
-                    />
-                    <CardContent>
-                      <Typography gutterBottom variant="h6" component="div">
-                        {detection.timestamp}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        Confidence: {(detection.confidence * 100).toFixed(1)}%
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              ))}
-            </Grid>
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Time</TableCell>
+                    <TableCell>Location</TableCell>
+                    <TableCell>Confidence</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {recentDetections.map((detection) => (
+                    <TableRow
+                      key={detection.id}
+                      sx={{
+                        '&:hover': {
+                          backgroundColor: (theme) =>
+                            alpha(theme.palette.primary.main, 0.05),
+                        },
+                        transition: 'background-color 0.2s',
+                      }}
+                    >
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                          {detection.timestamp}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <LocationOn sx={{ fontSize: 18, color: 'text.secondary' }} />
+                          <Typography variant="body2">{detection.location}</Typography>
+                        </Box>
+                      </TableCell>
+                      <TableCell>
+                        <Box sx={{ minWidth: 120 }}>
+                          <Typography variant="caption" sx={{ mb: 0.5, display: 'block' }}>
+                            {(detection.confidence * 100).toFixed(1)}%
+                          </Typography>
+                          <LinearProgress
+                            variant="determinate"
+                            value={Math.min(detection.confidence * 100, 100)}
+                            sx={{
+                              '& .MuiLinearProgress-bar': {
+                                backgroundColor:
+                                  detection.confidence * 100 > 70
+                                    ? 'success.main'
+                                    : detection.confidence * 100 > 40
+                                    ? 'warning.main'
+                                    : 'error.main',
+                              },
+                            }}
+                          />
+                        </Box>
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={detection.status}
+                          size="small"
+                          color="warning"
+                          sx={{ fontWeight: 500 }}
+                        />
+                      </TableCell>
+                      <TableCell align="right">
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => {
+                            const url = `http://localhost:5000/detections/${detection.image_path}`;
+                            window.open(url, '_blank');
+                          }}
+                        >
+                          <Visibility fontSize="small" />
+                        </IconButton>
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => handleDownloadImage(detection.image_path)}
+                        >
+                          <Download fontSize="small" />
+                        </IconButton>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
           </Paper>
         </Grid>
       </Grid>

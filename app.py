@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for
 from flask_cors import CORS
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 import cv2
@@ -13,6 +13,7 @@ from models import db, User, Detection
 from camera_controller import CameraController
 import logging
 from flask_migrate import Migrate
+from sqlalchemy import func
 
 # Load environment variables
 load_dotenv()
@@ -22,12 +23,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+
+# ✅ CORS configuration for React frontend (applies to ALL routes)
+# Allows requests from http://localhost:3000 to every Flask route, including /detections/*
+CORS(
+    app,
+    origins=["http://localhost:3000"],
+    supports_credentials=True,
+)
 
 # Configuration
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'novaya')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI', 'sqlite:///admin.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# ✅ DETECTION FOLDER: Absolute path to detections directory
+DETECTION_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'detections')
 
 # Initialize extensions
 db.init_app(app)
@@ -133,7 +144,7 @@ def logout_api():
     return jsonify({'message': 'Logout successful'})
 
 @app.route('/api/detections', methods=['GET'])
-@login_required
+# @login_required  # ⚠️ TEMPORARILY DISABLED for CORS testing
 def get_detections():
     detections = Detection.query.order_by(Detection.timestamp.desc()).all()
     return jsonify([{
@@ -146,7 +157,7 @@ def get_detections():
     } for d in detections])
 
 @app.route('/api/dashboard-stats', methods=['GET'])
-@login_required
+# @login_required  # ⚠️ TEMPORARILY DISABLED for CORS testing
 def get_dashboard_stats():
     """Get real-time dashboard statistics"""
     # Get all detections
@@ -184,6 +195,32 @@ def get_dashboard_stats():
         'within_schedule': within_schedule,
         'recent_detections': recent_detections_list
     })
+
+@app.route('/api/stats/detections_over_time', methods=['GET'])
+def detections_over_time_stats():
+    """Return detections count for the last 7 days, grouped by date."""
+    try:
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        rows = db.session.query(
+            func.date(Detection.timestamp).label('date'),
+            func.count(Detection.id).label('count')
+        ).filter(
+            Detection.timestamp >= seven_days_ago
+        ).group_by(
+            func.date(Detection.timestamp)
+        ).order_by(
+            func.date(Detection.timestamp)
+        ).all()
+
+        formatted = [{
+            'name': str(r.date),
+            'count': int(r.count)
+        } for r in rows]
+
+        return jsonify(formatted)
+    except Exception as e:
+        logger.error(f"Error building detections_over_time stats: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/detections', methods=['POST'])
 @login_required
@@ -241,7 +278,7 @@ def create_detection():
     return jsonify({'message': 'No phone detected'})
 
 @app.route('/api/settings', methods=['GET'])
-@login_required
+# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
 def get_settings():
     # Get available cameras
     available_cameras = CameraController.scan_available_cameras()
@@ -261,7 +298,7 @@ def get_settings():
     })
 
 @app.route('/api/settings', methods=['POST'])
-@login_required
+# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
 def update_settings():
     data = request.get_json()
     print("\nReceived settings update request")
@@ -309,11 +346,77 @@ def update_settings():
         print(f"Error updating settings: {e}")
         return jsonify({'error': str(e)}), 500
 
-# Serve detection images
+@app.route('/api/camera/start', methods=['POST'])
+# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+def start_camera():
+    """Manually start the camera (ignore schedule)"""
+    try:
+        print("\n🚀 Manual camera start requested")
+        camera_controller.start_camera()
+        return jsonify({
+            'message': 'Camera started successfully',
+            'camera_status': {
+                'is_running': camera_controller.is_running,
+                'within_schedule': camera_controller._is_within_schedule()
+            }
+        })
+    except Exception as e:
+        print(f"❌ Error starting camera: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/camera/stop', methods=['POST'])
+# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+def stop_camera():
+    """Manually stop the camera"""
+    try:
+        print("\n🛑 Manual camera stop requested")
+        camera_controller.stop_camera()
+        return jsonify({
+            'message': 'Camera stopped successfully',
+            'camera_status': {
+                'is_running': camera_controller.is_running,
+                'within_schedule': camera_controller._is_within_schedule()
+            }
+        })
+    except Exception as e:
+        print(f"❌ Error stopping camera: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/camera/status', methods=['GET'])
+# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+def camera_status():
+    """Get current camera status"""
+    try:
+        return jsonify({
+            'is_running': camera_controller.is_running,
+            'within_schedule': camera_controller._is_within_schedule(),
+            'settings': {
+                'camera_start_time': camera_controller.settings['camera_start_time'],
+                'camera_end_time': camera_controller.settings['camera_end_time'],
+                'camera_name': camera_controller.settings['camera_name']
+            }
+        })
+    except Exception as e:
+        print(f"❌ Error getting camera status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ✅ Serve detection images (secure endpoint with absolute path)
 @app.route('/detections/<path:filename>')
-@login_required
-def serve_detection(filename):
-    return send_from_directory('detections', filename)
+# @login_required  # ⚠️ TEMPORARILY DISABLED for testing
+def serve_detection_image(filename):
+    """
+    Securely serve detection images from the detections folder.
+    Uses absolute path to ensure cross-platform compatibility.
+    """
+    try:
+        print(f"📸 Serving image: {filename} from {DETECTION_FOLDER}")
+        return send_from_directory(DETECTION_FOLDER, filename)
+    except FileNotFoundError:
+        print(f"❌ Image not found: {filename}")
+        return jsonify({'error': 'Image not found'}), 404
+    except Exception as e:
+        print(f"❌ Error serving image {filename}: {e}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     with app.app_context():

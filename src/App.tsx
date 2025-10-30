@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { ThemeProvider, createTheme } from '@mui/material/styles';
+import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
@@ -8,25 +8,14 @@ import Detections from './pages/Detections';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import { AuthProvider } from './contexts/AuthContext';
-
-const theme = createTheme({
-  palette: {
-    mode: 'light',
-    primary: {
-      main: '#1976d2',
-    },
-    secondary: {
-      main: '#dc004e',
-    },
-  },
-});
+import theme from './theme';
 
 function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <AuthProvider>
-        <Router>
+      <Router>
+        <AuthProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<Layout />}>
@@ -36,8 +25,8 @@ function App() {
               <Route path="settings" element={<Settings />} />
             </Route>
           </Routes>
-        </Router>
-      </AuthProvider>
+        </AuthProvider>
+      </Router>
     </ThemeProvider>
   );
 }

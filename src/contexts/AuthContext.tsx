@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { authAPI } from '../services/api';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -31,23 +32,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (username: string, password: string) => {
     try {
-      // TODO: Implement actual API call
-      if (username === 'admin' && password === 'admin123') {
-        localStorage.setItem('auth_token', 'dummy_token');
-        setIsAuthenticated(true);
-        navigate('/dashboard');
-      } else {
-        throw new Error('Invalid credentials');
-      }
-    } catch (error) {
-      throw error;
+      // ✅ FIXED: Real API call to Flask backend
+      const response = await authAPI.login(username, password);
+      
+      // Store auth token
+      localStorage.setItem('auth_token', 'authenticated');
+      setIsAuthenticated(true);
+      
+      console.log('✅ Login successful:', response);
+      navigate('/dashboard');
+    } catch (error: any) {
+      console.error('❌ Login failed:', error);
+      throw new Error(error.response?.data?.message || 'Invalid credentials');
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('auth_token');
-    setIsAuthenticated(false);
-    navigate('/login');
+  const logout = async () => {
+    try {
+      // ✅ FIXED: Real API call to Flask backend
+      await authAPI.logout();
+      console.log('✅ Logout successful');
+    } catch (error) {
+      console.error('❌ Logout error:', error);
+    } finally {
+      localStorage.removeItem('auth_token');
+      setIsAuthenticated(false);
+      navigate('/login');
+    }
   };
 
   return (
