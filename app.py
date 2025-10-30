@@ -35,6 +35,8 @@ migrate = Migrate(app, db)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
+login_manager.login_message = "Musisz się zalogować, aby uzyskać dostęp do tej strony."
+login_manager.login_message_category = "danger"
 
 # Initialize camera controller
 camera_controller = CameraController()
@@ -74,9 +76,39 @@ def detections():
 def settings():
     return render_template('settings.html')
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        # Handle both JSON (API) and form data
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form
+        
+        username = data.get('username')
+        password = data.get('password')
+        
+        user = User.query.filter_by(username=username).first()
+        if user and user.password == password:  # In production, use proper password hashing
+            login_user(user)
+            next_page = request.args.get('next')
+            if next_page:
+                return redirect(next_page)
+            return redirect(url_for('dashboard'))
+        
+        # If JSON request, return JSON error
+        if request.is_json:
+            return jsonify({'message': 'Invalid credentials'}), 401
+        
+        # If form request, render login with error
+        return render_template('login.html', error='Nieprawidłowe dane logowania')
+    
+    # GET request - render login page
+    return render_template('login.html')
+
 # API Routes
 @app.route('/api/login', methods=['POST'])
-def login():
+def api_login():
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
