@@ -309,7 +309,7 @@ const Dashboard: React.FC = () => {
                     >
                       <TableCell>
                         <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                          {detection.timestamp}
+                          {new Date((detection.timestamp as any) + 'Z').toLocaleString()}
                         </Typography>
                       </TableCell>
                       <TableCell>

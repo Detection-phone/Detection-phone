@@ -61,6 +61,10 @@ const Detections: React.FC = () => {
   // ✅ FIXED: Fetch detections from API
   useEffect(() => {
     fetchDetections();
+    const intervalId = setInterval(() => {
+      fetchDetections();
+    }, 20000); // 20s polling to keep list fresh
+    return () => clearInterval(intervalId);
   }, []);
 
   const fetchDetections = async () => {
@@ -125,8 +129,12 @@ const Detections: React.FC = () => {
 
     try {
       console.log('🗑️ Deleting detection:', detection.id);
+      // Optimistic UI: remove immediately
+      const backup = detections;
+      setDetections(prev => prev.filter(d => d.id !== detection.id));
       await detectionAPI.delete(detection.id);
-      setDetections(detections.filter(d => d.id !== detection.id));
+      // Ensure sync with server state
+      await fetchDetections();
       
       setSnackbar({
         open: true,
@@ -135,6 +143,8 @@ const Detections: React.FC = () => {
       });
     } catch (error) {
       console.error('❌ Delete failed:', error);
+      // Re-sync state if deletion fails
+      await fetchDetections();
       setSnackbar({
         open: true,
         message: 'Failed to delete detection',
@@ -211,7 +221,7 @@ const Detections: React.FC = () => {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
                 <AccessTime sx={{ fontSize: 14, color: 'text.secondary' }} />
                 <Typography variant="caption" color="text.secondary">
-                  {detection.timestamp}
+                  {new Date((detection.timestamp as any) + 'Z').toLocaleString()}
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 2 }}>
@@ -302,7 +312,7 @@ const Detections: React.FC = () => {
       renderCell: (params: GridRenderCellParams) => (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <AccessTime sx={{ fontSize: 16, color: 'text.secondary' }} />
-          <Typography variant="body2">{params.value}</Typography>
+          <Typography variant="body2">{new Date((params.value as any) + 'Z').toLocaleString()}</Typography>
         </Box>
       ),
     },
@@ -567,7 +577,7 @@ const Detections: React.FC = () => {
                           Timestamp
                         </Typography>
                         <Typography variant="body2" sx={{ fontWeight: 500, mt: 0.5 }}>
-                          {selectedDetection.timestamp}
+                          {new Date((selectedDetection.timestamp as any) + 'Z').toLocaleString()}
                 </Typography>
                       </Box>
                       <Divider />
