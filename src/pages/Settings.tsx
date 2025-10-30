@@ -40,7 +40,6 @@ import {
   NotificationsActive,
   Email,
   Sms,
-  Telegram,
   Videocam,
   VideocamOff,
   PlayArrow,
@@ -50,6 +49,7 @@ import {
 import { TimePicker } from '@mui/x-date-pickers/TimePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+import { pl } from 'date-fns/locale';
 import { Select, MenuItem, InputLabel } from '@mui/material';
 
 // Confidence threshold marks
@@ -82,7 +82,6 @@ const Settings: React.FC = () => {
     cameraStartTime: new Date(),
     cameraEndTime: new Date(),
     blurFaces: true,
-    telegramEnabled: true,
     emailEnabled: true,
     smsEnabled: false,
     confidenceThreshold: 20,
@@ -129,7 +128,6 @@ const Settings: React.FC = () => {
           blurFaces: fetchedSettings.blur_faces,
           emailEnabled: fetchedSettings.email_notifications || fetchedSettings.notifications?.email || false,
           smsEnabled: fetchedSettings.sms_notifications || fetchedSettings.notifications?.sms || false,
-          telegramEnabled: fetchedSettings.telegram_notifications || fetchedSettings.notifications?.telegram || false,
           confidenceThreshold: Math.round(fetchedSettings.confidence_threshold * 100), // Convert 0-1 to 0-100
           cameraIndex: fetchedSettings.camera_index || 0,
           cameraName: fetchedSettings.camera_name || 'Camera 1',
@@ -174,7 +172,6 @@ const Settings: React.FC = () => {
         notifications: {
           email: settings.emailEnabled,
           sms: settings.smsEnabled,
-          telegram: settings.telegramEnabled,
         },
       };
 
@@ -222,7 +219,6 @@ const Settings: React.FC = () => {
       cameraStartTime: new Date(),
       cameraEndTime: new Date(),
       blurFaces: true,
-      telegramEnabled: true,
       emailEnabled: true,
       smsEnabled: false,
       confidenceThreshold: 20,
@@ -463,7 +459,7 @@ const Settings: React.FC = () => {
         <AccordionDetails>
           <Grid container spacing={3}>
             <Grid item xs={12} md={6}>
-              <LocalizationProvider dateAdapter={AdapterDateFns}>
+              <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={pl}>
                 <FormControl fullWidth>
                   <FormLabel sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
                     <WbTwilight fontSize="small" />
@@ -480,7 +476,7 @@ const Settings: React.FC = () => {
               </LocalizationProvider>
             </Grid>
             <Grid item xs={12} md={6}>
-              <LocalizationProvider dateAdapter={AdapterDateFns}>
+              <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={pl}>
                 <FormControl fullWidth>
                   <FormLabel sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Brightness4 fontSize="small" />
@@ -783,28 +779,6 @@ const Settings: React.FC = () => {
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       Receive alerts via text message
-                    </Typography>
-                  </Box>
-                </Box>
-              }
-            />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={settings.telegramEnabled}
-                  onChange={(e) => setSettings({ ...settings, telegramEnabled: e.target.checked })}
-                  color="primary"
-                />
-              }
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Telegram fontSize="small" color={settings.telegramEnabled ? 'primary' : 'disabled'} />
-                  <Box>
-                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      Telegram Notifications
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Receive alerts via Telegram
                     </Typography>
                   </Box>
                 </Box>

@@ -78,6 +78,23 @@ const Detections: React.FC = () => {
     }
   };
 
+  // Navigate to previous/next detection in the current list
+  const handlePrev = () => {
+    if (!selectedDetection) return;
+    const idx = detections.findIndex((d) => d.id === selectedDetection.id);
+    if (idx > 0) {
+      setSelectedDetection(detections[idx - 1]);
+    }
+  };
+
+  const handleNext = () => {
+    if (!selectedDetection) return;
+    const idx = detections.findIndex((d) => d.id === selectedDetection.id);
+    if (idx >= 0 && idx < detections.length - 1) {
+      setSelectedDetection(detections[idx + 1]);
+    }
+  };
+
   const handleViewChange = (_event: React.MouseEvent<HTMLElement>, newView: 'grid' | 'list' | null) => {
     if (newView !== null) {
       setViewMode(newView);
@@ -610,6 +627,8 @@ const Detections: React.FC = () => {
                 startIcon={<NavigateBefore />}
                 variant="outlined"
                 color="inherit"
+                onClick={handlePrev}
+                disabled={!selectedDetection || detections.findIndex(d => d.id === selectedDetection.id) === 0}
               >
                 Previous
               </Button>
@@ -633,6 +652,8 @@ const Detections: React.FC = () => {
                 endIcon={<NavigateNext />}
                 variant="outlined"
                 color="inherit"
+                onClick={handleNext}
+                disabled={!selectedDetection || detections.findIndex(d => d.id === selectedDetection.id) === detections.length - 1}
               >
                 Next
               </Button>
