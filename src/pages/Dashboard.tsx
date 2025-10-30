@@ -33,8 +33,6 @@ import {
 import {
   LineChart,
   Line,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -238,12 +236,12 @@ const Dashboard: React.FC = () => {
         </Grid>
 
         {/* Detections Over Time Chart */}
-        <Grid item xs={12} lg={8}>
-          <Paper sx={{ p: 3, height: '400px' }}>
+        <Grid item xs={12} lg={12}>
+          <Paper sx={{ p: 3, height: '480px' }}>
             <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>
               Detections Over Time (Last 7 Days)
             </Typography>
-            <ResponsiveContainer width="100%" height="85%">
+            <ResponsiveContainer width="100%" height="90%">
               <AreaChart data={chartData.length ? chartData : weeklyData}>
                 <defs>
                   <linearGradient id="colorDetections" x1="0" y1="0" x2="0" y2="1">
@@ -278,35 +276,7 @@ const Dashboard: React.FC = () => {
           </Paper>
         </Grid>
 
-        {/* Detections by Location Chart */}
-        <Grid item xs={12} lg={4}>
-          <Paper sx={{ p: 3, height: '400px' }}>
-            <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>
-              Detections by Location
-            </Typography>
-            <ResponsiveContainer width="100%" height="85%">
-              <BarChart data={locationData} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                <XAxis type="number" stroke="#94A3B8" style={{ fontSize: '0.75rem' }} />
-                <YAxis
-                  dataKey="location"
-                  type="category"
-                  width={100}
-                  stroke="#94A3B8"
-                  style={{ fontSize: '0.75rem' }}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#1E293B',
-                    border: '1px solid #334155',
-                    borderRadius: '8px',
-                  }}
-                />
-                <Bar dataKey="count" fill="#3B82F6" radius={[0, 8, 8, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </Paper>
-        </Grid>
+        
 
         {/* Recent Detections Table */}
         <Grid item xs={12}>

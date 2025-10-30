@@ -312,6 +312,7 @@ def get_settings():
         'confidence_threshold': camera_controller.settings['confidence_threshold'],
         'camera_index': camera_controller.settings['camera_index'],
         'camera_name': camera_controller.settings['camera_name'],
+        'anonymization_percent': camera_controller.settings.get('anonymization_percent', 50),
         'available_cameras': available_cameras,
         'notifications': {
             'email': camera_controller.settings.get('email_notifications', False),
@@ -349,6 +350,13 @@ def update_settings():
             if 'email' in data['notifications']:
                 camera_settings['email_notifications'] = data['notifications']['email']
                 print(f"📧 Email notifications: {data['notifications']['email']}")
+
+        # Handle anonymization percent
+        if 'anonymization_percent' in data:
+            try:
+                camera_settings['anonymization_percent'] = int(data['anonymization_percent'])
+            except Exception:
+                camera_settings['anonymization_percent'] = 50
         
         print(f"Updating camera controller (settings only, no auto-start) with: {camera_settings}")
         # ✅ Save-only: merge into controller settings without triggering auto-start/stop

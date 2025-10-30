@@ -82,6 +82,7 @@ const Settings: React.FC = () => {
     cameraStartTime: new Date(),
     cameraEndTime: new Date(),
     blurFaces: true,
+    anonymizationPercent: 50,
     emailEnabled: true,
     smsEnabled: false,
     confidenceThreshold: 20,
@@ -126,6 +127,7 @@ const Settings: React.FC = () => {
           cameraStartTime: timeStringToDate(fetchedSettings.camera_start_time),
           cameraEndTime: timeStringToDate(fetchedSettings.camera_end_time),
           blurFaces: fetchedSettings.blur_faces,
+          anonymizationPercent: fetchedSettings.anonymization_percent ?? 50,
           emailEnabled: fetchedSettings.email_notifications || fetchedSettings.notifications?.email || false,
           smsEnabled: fetchedSettings.sms_notifications || fetchedSettings.notifications?.sms || false,
           confidenceThreshold: Math.round(fetchedSettings.confidence_threshold * 100), // Convert 0-1 to 0-100
@@ -167,6 +169,7 @@ const Settings: React.FC = () => {
         camera_end_time: dateToTimeString(settings.cameraEndTime),
         blur_faces: settings.blurFaces,
         confidence_threshold: settings.confidenceThreshold / 100, // Convert 0-100 to 0-1
+        anonymization_percent: settings.anonymizationPercent,
         camera_index: settings.cameraIndex,
         camera_name: settings.cameraName,
         notifications: {
@@ -219,6 +222,7 @@ const Settings: React.FC = () => {
       cameraStartTime: new Date(),
       cameraEndTime: new Date(),
       blurFaces: true,
+      anonymizationPercent: 50,
       emailEnabled: true,
       smsEnabled: false,
       confidenceThreshold: 20,
@@ -538,7 +542,7 @@ const Settings: React.FC = () => {
                 Detection Settings
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Adjust detection sensitivity and thresholds
+                Adjust detection threshold and mode
               </Typography>
             </Box>
           </Box>
@@ -575,34 +579,15 @@ const Settings: React.FC = () => {
               max={100}
               sx={{ mb: 1 }}
             />
-            <FormHelperText>
-              Minimum confidence score required to trigger a detection. Higher values reduce false
-              positives but may miss some detections.
+            <FormHelperText sx={{ mt: 2, mb: 4 }}>
+              Wyższy próg = mniej fałszywych alarmów, ale ryzyko pominięcia. Niższy próg = bardziej czuły.
             </FormHelperText>
           </FormControl>
           <Divider sx={{ my: 3 }} />
           <Stack direction="row" spacing={1}>
-            <Chip
-              label="Low Sensitivity"
-              size="small"
-              variant="outlined"
-              clickable
-              onClick={() => setSettings({ ...settings, confidenceThreshold: 70 })}
-            />
-            <Chip
-              label="Medium (Recommended)"
-              size="small"
-              variant="outlined"
-              clickable
-              onClick={() => setSettings({ ...settings, confidenceThreshold: 40 })}
-            />
-            <Chip
-              label="High Sensitivity"
-              size="small"
-              variant="outlined"
-              clickable
-              onClick={() => setSettings({ ...settings, confidenceThreshold: 20 })}
-            />
+            <Chip label="Czuły (więcej detekcji)" size="small" variant="outlined" clickable onClick={() => setSettings({ ...settings, confidenceThreshold: 30 })} />
+            <Chip label="Zbalansowany (zalecany)" size="small" variant="outlined" clickable onClick={() => setSettings({ ...settings, confidenceThreshold: 60 })} />
+            <Chip label="Precyzyjny (mniej detekcji)" size="small" variant="outlined" clickable onClick={() => setSettings({ ...settings, confidenceThreshold: 85 })} />
           </Stack>
         </AccordionDetails>
       </Accordion>
@@ -637,15 +622,32 @@ const Settings: React.FC = () => {
             label={
               <Box>
                 <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                  Blur faces in images
+                  Enable anonymization (blur)
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Automatically blur detected faces to protect privacy
+                  Automatically blur detected people to protect privacy
                 </Typography>
               </Box>
             }
             sx={{ mb: 2 }}
           />
+          <FormControl fullWidth sx={{ opacity: settings.blurFaces ? 1 : 0.5 }}>
+            <FormLabel>Anonymization Area</FormLabel>
+            <Slider
+              disabled={!settings.blurFaces}
+              value={settings.anonymizationPercent}
+              onChange={(_e, value) => setSettings({ ...settings, anonymizationPercent: value as number })}
+              min={10}
+              max={100}
+              step={5}
+              valueLabelDisplay="auto"
+              valueLabelFormat={(v) => `${v}%`}
+              sx={{ mt: 1 }}
+            />
+            <FormHelperText>
+              Ustaw, jak duża górna część sylwetki ma zostać rozmyta.
+            </FormHelperText>
+          </FormControl>
         </AccordionDetails>
       </Accordion>
 

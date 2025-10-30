@@ -154,6 +154,7 @@ export interface Settings {
   camera_name: string;
   sms_notifications: boolean;
   email_notifications: boolean;
+  anonymization_percent?: number;
   telegram_notifications?: boolean;
   available_cameras?: CameraDevice[];
   notifications?: {

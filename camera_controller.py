@@ -59,7 +59,8 @@ class CameraController:
             'camera_index': self.camera_index,
             'camera_name': camera_name if camera_name else 'Camera 1',
             'sms_notifications': False,  # SMS notifications (Vonage + Cloudinary)
-            'email_notifications': False  # Email notifications (Yagmail + Cloudinary)
+            'email_notifications': False,  # Email notifications (Yagmail + Cloudinary)
+            'anonymization_percent': 50
         }
         self.detection_queue = Queue()
         
@@ -1186,8 +1187,13 @@ class AnonymizerWorker(threading.Thread):
                         # Oblicz wysokość bbox osoby
                         person_height = y2 - y1
                         
-                        # Oblicz górną część ciała (upper_body_ratio % wysokości od góry)
-                        upper_body_height = int(person_height * self.upper_body_ratio)
+                        # Oblicz górną część ciała (konfigurowalny % od góry)
+                        try:
+                            percent = int(self.settings.get('anonymization_percent', 50))
+                        except Exception:
+                            percent = 50
+                        ratio = max(0, min(100, percent)) / 100.0
+                        upper_body_height = int(person_height * ratio)
                         
                         # Definiuj ROI dla górnej części ciała
                         # X: cały bbox osoby (lewa-prawa)
@@ -1220,7 +1226,7 @@ class AnonymizerWorker(threading.Thread):
                             )
                             image[roi_y1:roi_y2, roi_x1:roi_x2] = blurred_upper_body
                             self.persons_anonymized += 1
-                            print(f"  ✓ Zanonimizowano osobę #{persons_found}: górne {upper_body_height}px z {person_height}px (conf: {confidence:.2f})")
+                            print(f"  ✓ Zanonimizowano osobę #{persons_found}: górne {int(ratio*100)}% ciała (conf: {confidence:.2f})")
                         else:
                             print(f"⚠️  Pusty ROI dla osoby, pomijam")
             
