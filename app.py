@@ -1,4 +1,7 @@
-from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for
+from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, Response
+import time
+import cv2
+import numpy as np
 from flask_cors import CORS
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from datetime import datetime, timedelta
@@ -313,6 +316,7 @@ def get_settings():
         'camera_index': camera_controller.settings['camera_index'],
         'camera_name': camera_controller.settings['camera_name'],
         'anonymization_percent': camera_controller.settings.get('anonymization_percent', 50),
+        'roi_coordinates': camera_controller.settings.get('roi_coordinates'),
         'available_cameras': available_cameras,
         'notifications': {
             'email': camera_controller.settings.get('email_notifications', False),
@@ -357,6 +361,16 @@ def update_settings():
                 camera_settings['anonymization_percent'] = int(data['anonymization_percent'])
             except Exception:
                 camera_settings['anonymization_percent'] = 50
+        
+        # Optional: Handle ROI coordinates (normalized [x1,y1,x2,y2])
+        if 'roi_coordinates' in data:
+            roi = data['roi_coordinates']
+            try:
+                if isinstance(roi, (list, tuple)) and len(roi) == 4:
+                    roi_floats = [float(v) for v in roi]
+                    camera_settings['roi_coordinates'] = roi_floats
+            except Exception:
+                pass
         
         print(f"Updating camera controller (settings only, no auto-start) with: {camera_settings}")
         # ✅ Save-only: merge into controller settings without triggering auto-start/stop
@@ -446,6 +460,64 @@ def serve_detection_image(filename):
     except Exception as e:
         print(f"❌ Error serving image {filename}: {e}")
         return jsonify({'error': str(e)}), 500
+
+# =========================
+# Camera MJPEG video stream
+# =========================
+# Placeholder image (Garfield) path
+PLACEHOLDER_IMG_PATH = 'static/images/looking.png'
+
+# Preload and encode placeholder once
+try:
+    _ph_frame = cv2.imread(PLACEHOLDER_IMG_PATH)
+    if _ph_frame is None:
+        raise RuntimeError("Placeholder not found or unreadable")
+    _, _ph_buf = cv2.imencode('.jpg', _ph_frame)
+    PLACEHOLDER_BYTES = _ph_buf.tobytes()
+except Exception as e:
+    print(f"Error loading placeholder image: {e}")
+    # Create black fallback with text
+    _ph_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(_ph_frame, 'Camera Offline', (160, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    _, _ph_buf = cv2.imencode('.jpg', _ph_frame)
+    PLACEHOLDER_BYTES = _ph_buf.tobytes()
+
+def generate_frames():
+    """Yield JPEG frames as multipart for MJPEG streaming with privacy Canny filter and offline placeholder."""
+    while True:
+        try:
+            # Get raw frame from controller
+            frame = None
+            try:
+                frame = camera_controller.get_last_frame()
+            except Exception:
+                frame = None
+
+            if frame is None:
+                frame_bytes = PLACEHOLDER_BYTES
+            else:
+                try:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    edges = cv2.Canny(gray, 100, 200)
+                    edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+                    ok, buf = cv2.imencode('.jpg', edges_bgr)
+                    frame_bytes = buf.tobytes() if ok else PLACEHOLDER_BYTES
+                except Exception as proc_err:
+                    print(f"Error processing Canny filter: {proc_err}")
+                    frame_bytes = PLACEHOLDER_BYTES
+
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.05)  # ~20 FPS to reduce CPU
+        except Exception:
+            time.sleep(0.1)
+            continue
+
+@app.route('/api/camera/video_feed', methods=['GET'])
+@login_required
+def video_feed():
+    """Stream live camera frames as MJPEG for the frontend settings page."""
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
     with app.app_context():

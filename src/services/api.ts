@@ -12,6 +12,11 @@ const api = axios.create({
   withCredentials: true, // Send cookies with requests for Flask session
 });
 
+// Helper to expose base URL when needed by consumers
+export const getBaseUrl = (): string => API_BASE_URL;
+// Also attach for default export access (api.getBaseUrl())
+(api as any).getBaseUrl = getBaseUrl;
+
 // Add request interceptor for auth token
 api.interceptors.request.use(
   (config) => {
@@ -155,6 +160,7 @@ export interface Settings {
   sms_notifications: boolean;
   email_notifications: boolean;
   anonymization_percent?: number;
+  roi_coordinates?: [number, number, number, number] | null;
   telegram_notifications?: boolean;
   available_cameras?: CameraDevice[];
   notifications?: {

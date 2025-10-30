@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, MouseEvent } from 'react';
 import {
   Box,
   Paper,
@@ -25,7 +25,7 @@ import {
   CircularProgress,
 } from '@mui/material';
 import { LoadingButton } from '@mui/lab';
-import { settingsAPI, cameraAPI, CameraDevice } from '../services/api';
+import api, { settingsAPI, cameraAPI, CameraDevice } from '../services/api';
 import {
   ExpandMore,
   Schedule,
@@ -45,6 +45,7 @@ import {
   PlayArrow,
   Stop,
   Camera,
+  FilterCenterFocus,
 } from '@mui/icons-material';
 import { TimePicker } from '@mui/x-date-pickers/TimePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -88,6 +89,7 @@ const Settings: React.FC = () => {
     confidenceThreshold: 20,
     cameraIndex: 0,
     cameraName: 'Camera 1',
+    roi: null as [number, number, number, number] | null,
   });
 
   const [availableCameras, setAvailableCameras] = useState<CameraDevice[]>([]);
@@ -108,6 +110,17 @@ const Settings: React.FC = () => {
     severity: 'success',
   });
   const [expanded, setExpanded] = useState<string | false>('schedule');
+
+  // ROI local drawing state
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
+  const [drawEnd, setDrawEnd] = useState<{ x: number; y: number } | null>(null);
+  const imgRef = React.useRef<HTMLImageElement | null>(null);
+  const wrapperRef = React.useRef<HTMLDivElement | null>(null);
+  const videoFeedRef = useRef<HTMLDivElement | null>(null);
+
+  // Re-loadable video src with cache-busting
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
 
   // Fetch settings and camera status on mount
   useEffect(() => {
@@ -133,6 +146,7 @@ const Settings: React.FC = () => {
           confidenceThreshold: Math.round(fetchedSettings.confidence_threshold * 100), // Convert 0-1 to 0-100
           cameraIndex: fetchedSettings.camera_index || 0,
           cameraName: fetchedSettings.camera_name || 'Camera 1',
+          roi: (fetchedSettings as any).roi_coordinates || null,
         });
 
         // Fetch camera status
@@ -176,6 +190,7 @@ const Settings: React.FC = () => {
           email: settings.emailEnabled,
           sms: settings.smsEnabled,
         },
+        ...(settings.roi ? { roi_coordinates: settings.roi } : {}),
       };
 
       console.log('💾 Saving settings:', payload);
@@ -206,6 +221,53 @@ const Settings: React.FC = () => {
     }
   };
 
+  // ROI drawing helpers
+  const getRelativeCoords = (e: React.MouseEvent) => {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    const x = Math.min(Math.max(e.clientX - rect.left, 0), rect.width);
+    const y = Math.min(Math.max(e.clientY - rect.top, 0), rect.height);
+    return { x, y, width: rect.width, height: rect.height } as any;
+  };
+
+  const onMouseDown = (e: React.MouseEvent) => {
+    const { x, y } = getRelativeCoords(e) as any;
+    setIsDrawing(true);
+    setDrawStart({ x, y });
+    setDrawEnd({ x, y });
+  };
+
+  const onMouseMove = (e: React.MouseEvent) => {
+    if (!isDrawing || !drawStart) return;
+    const { x, y } = getRelativeCoords(e) as any;
+    setDrawEnd({ x, y });
+  };
+
+  const onMouseUp = (e: React.MouseEvent) => {
+    if (!isDrawing || !drawStart) return;
+    const { x, y, width, height } = getRelativeCoords(e) as any;
+    setIsDrawing(false);
+    setDrawEnd({ x, y });
+    // Normalize and save temp ROI
+    const x1 = Math.min(drawStart.x, x) / width;
+    const y1 = Math.min(drawStart.y, y) / height;
+    const x2 = Math.max(drawStart.x, x) / width;
+    const y2 = Math.max(drawStart.y, y) / height;
+    const clamped: [number, number, number, number] = [
+      Math.max(0, Math.min(1, x1)),
+      Math.max(0, Math.min(1, y1)),
+      Math.max(0, Math.min(1, x2)),
+      Math.max(0, Math.min(1, y2)),
+    ];
+    setSettings({ ...settings, roi: clamped });
+  };
+
+  const clearROI = () => {
+    setSettings({ ...settings, roi: null });
+    setDrawStart(null);
+    setDrawEnd(null);
+  };
+
   const handleCameraChange = (cameraIndex: number) => {
     const selectedCamera = availableCameras.find((cam) => cam.index === cameraIndex);
     if (selectedCamera) {
@@ -228,6 +290,7 @@ const Settings: React.FC = () => {
       confidenceThreshold: 20,
       cameraIndex: 0,
       cameraName: 'Camera 1',
+      roi: null,
     });
     setSnackbar({
       open: true,
@@ -588,6 +651,159 @@ const Settings: React.FC = () => {
             <Chip label="Czuły (więcej detekcji)" size="small" variant="outlined" clickable onClick={() => setSettings({ ...settings, confidenceThreshold: 30 })} />
             <Chip label="Zbalansowany (zalecany)" size="small" variant="outlined" clickable onClick={() => setSettings({ ...settings, confidenceThreshold: 60 })} />
             <Chip label="Precyzyjny (mniej detekcji)" size="small" variant="outlined" clickable onClick={() => setSettings({ ...settings, confidenceThreshold: 85 })} />
+          </Stack>
+        </AccordionDetails>
+      </Accordion>
+
+      {/* ================================================================== */}
+      {/* NOWA SEKCJA ROI (wg wskazówek) */}
+      {/* ================================================================== */}
+      <Accordion
+        defaultExpanded
+        sx={{ mb: 2 }}
+        onChange={(_e, isExpanded) => {
+          if (isExpanded) {
+            setVideoSrc(`${(api as any).getBaseUrl()}/api/camera/video_feed?t=${Date.now()}`);
+          } else {
+            setVideoSrc(null);
+          }
+        }}
+      >
+        <AccordionSummary expandIcon={<ExpandMore />}>
+          <FilterCenterFocus sx={{ mr: 1, color: 'text.secondary' }} />
+          <Typography>Region Zainteresowania (ROI)</Typography>
+        </AccordionSummary>
+        <AccordionDetails>
+          <Stack spacing={2}>
+            <Typography variant="body2" color="text.secondary">
+              Kliknij i przeciągnij na podglądzie na żywo, aby narysować obszar. Detekcje będą rejestrowane tylko w tym obszarze.
+            </Typography>
+
+            {/* --- Kontener do rysowania --- */}
+            <Box
+              ref={videoFeedRef}
+              sx={{
+                position: 'relative',
+                cursor: 'crosshair',
+                width: '100%',
+                border: (theme) => `1px solid ${theme.palette.divider}`,
+                overflow: 'hidden',
+              }}
+              onMouseDown={(e: React.MouseEvent<HTMLDivElement>) => {
+                if (!videoFeedRef.current) return;
+                const rect = videoFeedRef.current.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                setIsDrawing(true);
+                setDrawStart({ x, y });
+                setDrawEnd({ x, y });
+              }}
+              onMouseMove={(e: React.MouseEvent<HTMLDivElement>) => {
+                if (!isDrawing || !videoFeedRef.current || !drawStart) return;
+                const rect = videoFeedRef.current.getBoundingClientRect();
+                const x = Math.min(Math.max(0, e.clientX - rect.left), rect.width);
+                const y = Math.min(Math.max(0, e.clientY - rect.top), rect.height);
+                setDrawEnd({ x, y });
+              }}
+              onMouseUp={(e: React.MouseEvent<HTMLDivElement>) => {
+                if (!isDrawing || !videoFeedRef.current || !drawStart) return;
+                setIsDrawing(false);
+                const { width, height } = videoFeedRef.current.getBoundingClientRect();
+                if (width === 0 || height === 0 || !drawEnd) return;
+                const x1 = Math.min(drawStart.x, drawEnd.x) / width;
+                const y1 = Math.min(drawStart.y, drawEnd.y) / height;
+                const x2 = Math.max(drawStart.x, drawEnd.x) / width;
+                const y2 = Math.max(drawStart.y, drawEnd.y) / height;
+                if (x1 === x2 || y1 === y2) {
+                  setSettings({ ...settings, roi: null });
+                } else {
+                  setSettings({
+                    ...settings,
+                    roi: [
+                      parseFloat(x1.toFixed(4)),
+                      parseFloat(y1.toFixed(4)),
+                      parseFloat(x2.toFixed(4)),
+                      parseFloat(y2.toFixed(4)),
+                    ],
+                  });
+                }
+              }}
+              onMouseLeave={() => {
+                if (isDrawing) setIsDrawing(false);
+              }}
+            >
+              {/* Podgląd na żywo */}
+              <Box sx={{ position: 'relative', minHeight: '200px', background: '#000' }}>
+                {videoSrc ? (
+                  <img
+                    src={videoSrc}
+                    alt="Live preview"
+                    style={{
+                      width: '100%',
+                      height: 'auto',
+                      display: 'block',
+                      pointerEvents: 'none',
+                    }}
+                  />
+                ) : (
+                  <img
+                    src={'/static/images/looking.png'}
+                    alt="Live preview offline"
+                    style={{
+                      width: '100%',
+                      height: 'auto',
+                      display: 'block',
+                      objectFit: 'contain',
+                      maxHeight: '480px',
+                    }}
+                  />
+                )}
+              </Box>
+
+              {/* Narysowany prostokąt (w trakcie) */}
+              {isDrawing && drawStart && drawEnd && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    border: '2px dashed #00bfff',
+                    left: Math.min(drawStart.x, drawEnd.x),
+                    top: Math.min(drawStart.y, drawEnd.y),
+                    width: Math.abs(drawStart.x - drawEnd.x),
+                    height: Math.abs(drawStart.y - drawEnd.y),
+                    pointerEvents: 'none',
+                  }}
+                />
+              )}
+
+              {/* Zapisany prostokąt */}
+              {!isDrawing && settings.roi && videoFeedRef.current && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    border: '2px solid #00bfff',
+                    backgroundColor: 'rgba(0, 191, 255, 0.2)',
+                    left: settings.roi[0] * videoFeedRef.current.clientWidth,
+                    top: settings.roi[1] * videoFeedRef.current.clientHeight,
+                    width: (settings.roi[2] - settings.roi[0]) * videoFeedRef.current.clientWidth,
+                    height: (settings.roi[3] - settings.roi[1]) * videoFeedRef.current.clientHeight,
+                    pointerEvents: 'none',
+                  }}
+                />
+              )}
+            </Box>
+
+            {/* Przyciski */}
+            <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center">
+              <Button variant="outlined" color="warning" onClick={() => setSettings({ ...settings, roi: null })}>
+                Wyczyść ROI
+              </Button>
+              <Typography variant="body2" fontFamily="monospace" color="text.secondary">
+                {settings?.roi ? `ROI: [${settings.roi.join(', ')}]` : 'ROI: [Brak]'}
+              </Typography>
+              <LoadingButton variant="contained" startIcon={<Save />} loading={loading} onClick={handleSave}>
+                Zapisz ROI
+              </LoadingButton>
+            </Stack>
           </Stack>
         </AccordionDetails>
       </Accordion>

@@ -35,6 +35,7 @@ class CameraController:
         self.camera = None
         self.is_running = False
         self.thread = None
+        self.last_frame = None
         
         # If camera_name is provided, try to find its index
         if camera_name:
@@ -60,7 +61,9 @@ class CameraController:
             'camera_name': camera_name if camera_name else 'Camera 1',
             'sms_notifications': False,  # SMS notifications (Vonage + Cloudinary)
             'email_notifications': False,  # Email notifications (Yagmail + Cloudinary)
-            'anonymization_percent': 50
+            'anonymization_percent': 50,
+            # ROI as normalized [x1, y1, x2, y2] or None
+            'roi_coordinates': None
         }
         self.detection_queue = Queue()
         
@@ -431,8 +434,8 @@ class CameraController:
             except Exception:
                 cv2.destroyAllWindows()
             # Let GUI process window teardown
-            for _ in range(5):
-                cv2.waitKey(1)
+            # for _ in range(5):
+            #     cv2.waitKey(1)
         except Exception:
             pass
         
@@ -537,22 +540,70 @@ class CameraController:
                 else:
                     consecutive_failures = 0
                 
+                # Validate frame before operations
+                if frame is None or not hasattr(frame, 'shape') or len(frame.shape) < 2:
+                    time.sleep(0.1)
+                    continue
+                
+                # Validate frame dimensions
+                try:
+                    h, w = frame.shape[:2]
+                    if h == 0 or w == 0:
+                        time.sleep(0.1)
+                        continue
+                except (AttributeError, IndexError, TypeError):
+                    time.sleep(0.1)
+                    continue
+                
                 # KLUCZOWE: NIE zamazuj twarzy w real-time!
                 # Zamazywanie będzie robione OFFLINE przez AnonymizerWorker
                 # Wyświetlamy ORYGINALNĄ klatkę bez zamazania
-                display_frame = frame.copy()
+                try:
+                    display_frame = frame.copy()
+                except Exception as e:
+                    print(f"Error copying frame: {e}")
+                    time.sleep(0.1)
+                    continue
+
+                # Update last_frame for MJPEG streaming (use original frame)
+                try:
+                    self.last_frame = frame.copy()
+                except Exception as e:
+                    print(f"Error updating last_frame: {e}")
+                    # Keep old frame if copy fails
+                    pass
                 
                 # Run detection every 5 frames
                 frame_count += 1
                 if frame_count % 5 == 0 and self.model is not None:
                     try:
                         results = self.model(frame, verbose=False)  # Używa ORYGINALNEJ klatki
+                        # Read ROI once per batch
+                        roi = self.settings.get('roi_coordinates')
+                        frame_height, frame_width = frame.shape[:2]
                         for result in results:
                             boxes = result.boxes
                             for box in boxes:
                                 class_id = int(box.cls[0])
                                 confidence = float(box.conf[0])
                                 if class_id == self.phone_class_id and confidence >= self.settings['confidence_threshold']:
+                                    # If ROI defined, filter by center point falling inside ROI (normalized)
+                                    allow = True
+                                    if roi and isinstance(roi, (list, tuple)) and len(roi) == 4:
+                                        try:
+                                            x1f, y1f, x2f, y2f = [float(v) for v in roi]
+                                        except Exception:
+                                            x1f, y1f, x2f, y2f = 0.0, 0.0, 1.0, 1.0
+                                        bx1, by1, bx2, by2 = map(float, box.xyxy[0])
+                                        center_x = (bx1 + bx2) / 2.0
+                                        center_y = (by1 + by2) / 2.0
+                                        norm_cx = center_x / max(1, frame_width)
+                                        norm_cy = center_y / max(1, frame_height)
+                                        allow = (x1f <= norm_cx <= x2f) and (y1f <= norm_cy <= y2f)
+                                    if not allow:
+                                        # Skip detection outside ROI
+                                        continue
+
                                     print(f"📱 Phone detected with confidence: {confidence}")
                                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                                     cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
@@ -569,10 +620,10 @@ class CameraController:
                     except Exception as e:
                         print(f"Error processing frame with YOLO: {e}")
                 
-                # Display frame (ORYGINALNA klatka bez zamazanych twarzy)
-                cv2.imshow('Phone Detection', display_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+                # Display disabled in server mode to avoid GUI blocking
+                # cv2.imshow('Phone Detection', display_frame)
+                # if cv2.waitKey(1) & 0xFF == ord('q'):
+                #     break
                 
                 # AnonymizerWorker przetwarza kolejkę automatycznie w tle
                 
@@ -588,6 +639,26 @@ class CameraController:
         except Exception:
             pass
         print("Camera loop ended")
+
+    def get_current_frame_bytes(self):
+        """Return the latest captured frame encoded as JPEG bytes, or None if unavailable."""
+        try:
+            if self.last_frame is None:
+                return None
+            # Encode to JPEG
+            success, buffer = cv2.imencode('.jpg', self.last_frame)
+            if not success:
+                return None
+            return buffer.tobytes()
+        except Exception:
+            return None
+
+    def get_last_frame(self):
+        """Return the latest raw frame (numpy array) or None if unavailable."""
+        try:
+            return self.last_frame
+        except Exception:
+            return None
 
     def __del__(self):
         """Czysty shutdown - zatrzymaj kamerę i workera"""
