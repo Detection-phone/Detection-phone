@@ -150,9 +150,26 @@ export interface CameraDevice {
   fps: number;
 }
 
+export interface DaySchedule {
+  enabled: boolean;
+  start: string; // HH:MM format
+  end: string; // HH:MM format
+}
+
+export interface WeeklySchedule {
+  monday: DaySchedule;
+  tuesday: DaySchedule;
+  wednesday: DaySchedule;
+  thursday: DaySchedule;
+  friday: DaySchedule;
+  saturday: DaySchedule;
+  sunday: DaySchedule;
+}
+
 export interface Settings {
-  camera_start_time: string;
-  camera_end_time: string;
+  schedule?: WeeklySchedule; // New weekly schedule
+  camera_start_time?: string; // Legacy - kept for backward compatibility
+  camera_end_time?: string; // Legacy - kept for backward compatibility
   blur_faces: boolean;
   confidence_threshold: number;
   camera_index: number;

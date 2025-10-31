@@ -23,9 +23,11 @@ import {
   Stack,
   alpha,
   CircularProgress,
+  Checkbox,
+  ButtonGroup,
 } from '@mui/material';
 import { LoadingButton } from '@mui/lab';
-import api, { settingsAPI, cameraAPI, CameraDevice } from '../services/api';
+import api, { settingsAPI, cameraAPI, CameraDevice, getBaseUrl } from '../services/api';
 import {
   ExpandMore,
   Schedule,
@@ -78,10 +80,37 @@ const dateToTimeString = (date: Date): string => {
   return `${hours}:${minutes}`;
 };
 
+// Type for weekly schedule
+type DaySchedule = {
+  enabled: boolean;
+  start: string; // HH:MM format
+  end: string; // HH:MM format
+};
+
+type WeeklySchedule = {
+  monday: DaySchedule;
+  tuesday: DaySchedule;
+  wednesday: DaySchedule;
+  thursday: DaySchedule;
+  friday: DaySchedule;
+  saturday: DaySchedule;
+  sunday: DaySchedule;
+};
+
+// Default schedule structure
+const DEFAULT_SCHEDULE: WeeklySchedule = {
+  monday: { enabled: true, start: '07:00', end: '16:00' },
+  tuesday: { enabled: true, start: '07:00', end: '16:00' },
+  wednesday: { enabled: true, start: '07:00', end: '16:00' },
+  thursday: { enabled: true, start: '07:00', end: '16:00' },
+  friday: { enabled: true, start: '07:00', end: '16:00' },
+  saturday: { enabled: false, start: '07:00', end: '16:00' },
+  sunday: { enabled: false, start: '07:00', end: '16:00' },
+};
+
 const Settings: React.FC = () => {
   const [settings, setSettings] = useState({
-    cameraStartTime: new Date(),
-    cameraEndTime: new Date(),
+    schedule: DEFAULT_SCHEDULE,
     blurFaces: true,
     anonymizationPercent: 50,
     emailEnabled: true,
@@ -111,6 +140,9 @@ const Settings: React.FC = () => {
   });
   const [expanded, setExpanded] = useState<string | false>('schedule');
 
+  // ROI state
+  const [isRoiExpanded, setIsRoiExpanded] = useState(false);
+
   // ROI local drawing state
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
@@ -136,9 +168,28 @@ const Settings: React.FC = () => {
           setAvailableCameras(fetchedSettings.available_cameras);
         }
         
+        // Handle schedule - check for new weekly schedule or fallback to old format
+        let schedule = DEFAULT_SCHEDULE;
+        if ((fetchedSettings as any).schedule) {
+          // New weekly schedule format
+          schedule = (fetchedSettings as any).schedule as WeeklySchedule;
+        } else if ((fetchedSettings as any).camera_start_time && (fetchedSettings as any).camera_end_time) {
+          // Legacy format - convert to weekly schedule (Mon-Fri enabled)
+          const startTime = (fetchedSettings as any).camera_start_time;
+          const endTime = (fetchedSettings as any).camera_end_time;
+          schedule = {
+            monday: { enabled: true, start: startTime, end: endTime },
+            tuesday: { enabled: true, start: startTime, end: endTime },
+            wednesday: { enabled: true, start: startTime, end: endTime },
+            thursday: { enabled: true, start: startTime, end: endTime },
+            friday: { enabled: true, start: startTime, end: endTime },
+            saturday: { enabled: false, start: startTime, end: endTime },
+            sunday: { enabled: false, start: startTime, end: endTime },
+          };
+        }
+        
         setSettings({
-          cameraStartTime: timeStringToDate(fetchedSettings.camera_start_time),
-          cameraEndTime: timeStringToDate(fetchedSettings.camera_end_time),
+          schedule: schedule,
           blurFaces: fetchedSettings.blur_faces,
           anonymizationPercent: fetchedSettings.anonymization_percent ?? 50,
           emailEnabled: fetchedSettings.email_notifications || fetchedSettings.notifications?.email || false,
@@ -170,6 +221,19 @@ const Settings: React.FC = () => {
     fetchData();
   }, []);
 
+  // Reactive video stream management: responds to both ROI accordion state and camera status
+  useEffect(() => {
+    if (isRoiExpanded && cameraStatus.isRunning) {
+      // PRZYPADEK 1: Akordeon jest otwarty I kamera działa
+      // Uruchom lub odśwież stream
+      setVideoSrc(`${getBaseUrl()}/api/camera/video_feed?t=${Date.now()}`);
+    } else {
+      // PRZYPADEK 2: Akordeon jest zamknięty LUB kamera jest zatrzymana
+      // Zatrzymaj stream (wyczyść src)
+      setVideoSrc(null);
+    }
+  }, [isRoiExpanded, cameraStatus.isRunning]); // Reaguj na obie te zmiany
+
   const handleAccordionChange = (panel: string) => (_event: React.SyntheticEvent, isExpanded: boolean) => {
     setExpanded(isExpanded ? panel : false);
   };
@@ -179,8 +243,7 @@ const Settings: React.FC = () => {
     try {
       // Convert to API format
       const payload = {
-        camera_start_time: dateToTimeString(settings.cameraStartTime),
-        camera_end_time: dateToTimeString(settings.cameraEndTime),
+        schedule: settings.schedule, // Weekly schedule object
         blur_faces: settings.blurFaces,
         confidence_threshold: settings.confidenceThreshold / 100, // Convert 0-100 to 0-1
         anonymization_percent: settings.anonymizationPercent,
@@ -281,8 +344,7 @@ const Settings: React.FC = () => {
 
   const handleReset = () => {
     setSettings({
-      cameraStartTime: new Date(),
-      cameraEndTime: new Date(),
+      schedule: DEFAULT_SCHEDULE,
       blurFaces: true,
       anonymizationPercent: 50,
       emailEnabled: true,
@@ -353,63 +415,102 @@ const Settings: React.FC = () => {
 
   // ✅ Schedule Quick Select Handlers
   const handleSet247 = () => {
-    const startTime = new Date();
-    startTime.setHours(0, 0, 0, 0);
-    
-    const endTime = new Date();
-    endTime.setHours(23, 59, 0, 0);
+    const schedule24_7: WeeklySchedule = {
+      monday: { enabled: true, start: '00:00', end: '23:59' },
+      tuesday: { enabled: true, start: '00:00', end: '23:59' },
+      wednesday: { enabled: true, start: '00:00', end: '23:59' },
+      thursday: { enabled: true, start: '00:00', end: '23:59' },
+      friday: { enabled: true, start: '00:00', end: '23:59' },
+      saturday: { enabled: true, start: '00:00', end: '23:59' },
+      sunday: { enabled: true, start: '00:00', end: '23:59' },
+    };
     
     setSettings({
       ...settings,
-      cameraStartTime: startTime,
-      cameraEndTime: endTime,
+      schedule: schedule24_7,
     });
     
     setSnackbar({
       open: true,
-      message: '24/7 schedule set (00:00 - 23:59)',
+      message: '24/7 schedule set (all days 00:00 - 23:59)',
       severity: 'info',
     });
   };
 
   const handleSetBusinessHours = () => {
-    const startTime = new Date();
-    startTime.setHours(9, 0, 0, 0);
-    
-    const endTime = new Date();
-    endTime.setHours(17, 0, 0, 0);
+    const scheduleBusiness: WeeklySchedule = {
+      monday: { enabled: true, start: '07:00', end: '16:00' },
+      tuesday: { enabled: true, start: '07:00', end: '16:00' },
+      wednesday: { enabled: true, start: '07:00', end: '16:00' },
+      thursday: { enabled: true, start: '07:00', end: '16:00' },
+      friday: { enabled: true, start: '07:00', end: '16:00' },
+      saturday: { enabled: false, start: '07:00', end: '16:00' },
+      sunday: { enabled: false, start: '07:00', end: '16:00' },
+    };
     
     setSettings({
       ...settings,
-      cameraStartTime: startTime,
-      cameraEndTime: endTime,
+      schedule: scheduleBusiness,
     });
     
     setSnackbar({
       open: true,
-      message: 'Business Hours schedule set (09:00 - 17:00)',
+      message: 'Business Hours schedule set (Mon-Fri 07:00 - 16:00, weekends off)',
       severity: 'info',
     });
   };
 
   const handleSetNightOnly = () => {
-    const startTime = new Date();
-    startTime.setHours(18, 0, 0, 0);
-    
-    const endTime = new Date();
-    endTime.setHours(6, 0, 0, 0);
+    const scheduleNight: WeeklySchedule = {
+      monday: { enabled: true, start: '22:00', end: '06:00' },
+      tuesday: { enabled: true, start: '22:00', end: '06:00' },
+      wednesday: { enabled: true, start: '22:00', end: '06:00' },
+      thursday: { enabled: true, start: '22:00', end: '06:00' },
+      friday: { enabled: true, start: '22:00', end: '06:00' },
+      saturday: { enabled: false, start: '22:00', end: '06:00' },
+      sunday: { enabled: false, start: '22:00', end: '06:00' },
+    };
     
     setSettings({
       ...settings,
-      cameraStartTime: startTime,
-      cameraEndTime: endTime,
+      schedule: scheduleNight,
     });
     
     setSnackbar({
       open: true,
-      message: 'Night Only schedule set (18:00 - 06:00)',
+      message: 'Night Only schedule set (Mon-Fri 22:00 - 06:00, weekends off)',
       severity: 'info',
     });
+  };
+  
+  // Helper to update a single day's schedule
+  const updateDaySchedule = (day: keyof WeeklySchedule, field: keyof DaySchedule, value: boolean | string) => {
+    setSettings({
+      ...settings,
+      schedule: {
+        ...settings.schedule,
+        [day]: {
+          ...settings.schedule[day],
+          [field]: value,
+        },
+      },
+    });
+  };
+  
+  // Helper to convert time string (HH:MM) to Date for TimePicker
+  const timeStringToDatePicker = (timeStr: string): Date => {
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    const date = new Date();
+    date.setHours(hours, minutes, 0, 0);
+    return date;
+  };
+  
+  // Helper to convert Date from TimePicker to time string (HH:MM)
+  const datePickerToTimeString = (date: Date | null): string => {
+    if (!date) return '00:00';
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
   };
 
   // Show loading spinner on initial load
@@ -524,70 +625,107 @@ const Settings: React.FC = () => {
           </Box>
         </AccordionSummary>
         <AccordionDetails>
-          <Grid container spacing={3}>
-            <Grid item xs={12} md={6}>
-              <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={pl}>
-                <FormControl fullWidth>
-                  <FormLabel sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <WbTwilight fontSize="small" />
-                    Start Time
-                  </FormLabel>
-                  <TimePicker
-                    value={settings.cameraStartTime}
-                    onChange={(newValue) =>
-                      setSettings({ ...settings, cameraStartTime: newValue || new Date() })
-                    }
-                  />
-                  <FormHelperText>When to start detection</FormHelperText>
-                </FormControl>
-              </LocalizationProvider>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={pl}>
-                <FormControl fullWidth>
-                  <FormLabel sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Brightness4 fontSize="small" />
-                    End Time
-                  </FormLabel>
-                  <TimePicker
-                    value={settings.cameraEndTime}
-                    onChange={(newValue) =>
-                      setSettings({ ...settings, cameraEndTime: newValue || new Date() })
-                    }
-                  />
-                  <FormHelperText>When to stop detection</FormHelperText>
-                </FormControl>
-              </LocalizationProvider>
-            </Grid>
-            <Grid item xs={12}>
-              <Stack direction="row" spacing={1}>
-                <Chip 
-                  label="24/7" 
-                  size="small" 
-                  variant="outlined" 
-                  clickable 
-                  onClick={handleSet247}
-                  icon={<Schedule fontSize="small" />}
-                />
-                <Chip 
-                  label="Business Hours (9-5)" 
-                  size="small" 
-                  variant="outlined" 
-                  clickable 
-                  onClick={handleSetBusinessHours}
-                  icon={<WbTwilight fontSize="small" />}
-                />
-                <Chip 
-                  label="Night Only" 
-                  size="small" 
-                  variant="outlined" 
-                  clickable 
-                  onClick={handleSetNightOnly}
-                  icon={<Brightness4 fontSize="small" />}
-                />
-              </Stack>
-            </Grid>
-          </Grid>
+          <Stack spacing={2}>
+            {/* Preset buttons */}
+            <Stack direction="row" spacing={1} flexWrap="wrap">
+              <Chip 
+                label="24/7" 
+                size="small" 
+                variant="outlined" 
+                clickable 
+                onClick={handleSet247}
+                icon={<Schedule fontSize="small" />}
+              />
+              <Chip 
+                label="Business Hours (Mon-Fri 7-16)" 
+                size="small" 
+                variant="outlined" 
+                clickable 
+                onClick={handleSetBusinessHours}
+                icon={<WbTwilight fontSize="small" />}
+              />
+              <Chip 
+                label="Night Only (Mon-Fri 22-06)" 
+                size="small" 
+                variant="outlined" 
+                clickable 
+                onClick={handleSetNightOnly}
+                icon={<Brightness4 fontSize="small" />}
+              />
+            </Stack>
+            
+            <Divider />
+            
+            {/* 7-day schedule grid */}
+            <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={pl}>
+              <Grid container spacing={2}>
+                {(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const).map((day) => {
+                  const dayConfig = settings.schedule[day];
+                  const dayLabel = day.charAt(0).toUpperCase() + day.slice(1);
+                  
+                  return (
+                    <Grid item xs={12} key={day}>
+                      <Paper variant="outlined" sx={{ p: 2 }}>
+                        <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+                          {/* Checkbox for enabled */}
+                          <Checkbox
+                            checked={dayConfig.enabled}
+                            onChange={(e) => updateDaySchedule(day, 'enabled', e.target.checked)}
+                            size="small"
+                          />
+                          
+                          {/* Day label */}
+                          <Typography variant="body2" sx={{ minWidth: 80, fontWeight: 500 }}>
+                            {dayLabel}
+                          </Typography>
+                          
+                          {/* Start time picker */}
+                          <TimePicker
+                            label="Start"
+                            value={timeStringToDatePicker(dayConfig.start)}
+                            onChange={(newValue) => {
+                              if (newValue) {
+                                updateDaySchedule(day, 'start', datePickerToTimeString(newValue));
+                              }
+                            }}
+                            disabled={!dayConfig.enabled}
+                            slotProps={{
+                              textField: {
+                                size: 'small',
+                                sx: { width: 120 },
+                              },
+                            }}
+                          />
+                          
+                          <Typography variant="body2" color="text.secondary">
+                            to
+                          </Typography>
+                          
+                          {/* End time picker */}
+                          <TimePicker
+                            label="End"
+                            value={timeStringToDatePicker(dayConfig.end)}
+                            onChange={(newValue) => {
+                              if (newValue) {
+                                updateDaySchedule(day, 'end', datePickerToTimeString(newValue));
+                              }
+                            }}
+                            disabled={!dayConfig.enabled}
+                            slotProps={{
+                              textField: {
+                                size: 'small',
+                                sx: { width: 120 },
+                              },
+                            }}
+                          />
+                        </Stack>
+                      </Paper>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            </LocalizationProvider>
+          </Stack>
         </AccordionDetails>
       </Accordion>
 
@@ -659,14 +797,10 @@ const Settings: React.FC = () => {
       {/* NOWA SEKCJA ROI (wg wskazówek) */}
       {/* ================================================================== */}
       <Accordion
-        defaultExpanded
+        expanded={isRoiExpanded}
         sx={{ mb: 2 }}
         onChange={(_e, isExpanded) => {
-          if (isExpanded) {
-            setVideoSrc(`${(api as any).getBaseUrl()}/api/camera/video_feed?t=${Date.now()}`);
-          } else {
-            setVideoSrc(null);
-          }
+          setIsRoiExpanded(isExpanded);
         }}
       >
         <AccordionSummary expandIcon={<ExpandMore />}>

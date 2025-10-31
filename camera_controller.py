@@ -52,9 +52,12 @@ class CameraController:
         # Verify camera availability
         self._verify_camera()
         
+        # Import DEFAULT_SCHEDULE from models
+        from models import DEFAULT_SCHEDULE
+        
         self.settings = {
-            'camera_start_time': '00:00',
-            'camera_end_time': '23:59',
+            # Weekly schedule (replaces camera_start_time and camera_end_time)
+            'schedule': DEFAULT_SCHEDULE.copy(),
             'blur_faces': True,  # Kontroluje czy AnonymizerWorker działa (offline blur)
             'confidence_threshold': 0.2,
             'camera_index': self.camera_index,
@@ -242,34 +245,48 @@ class CameraController:
                     print("Started schedule check thread")
 
     def _is_within_schedule(self):
-        """Check if current time is within camera operation schedule"""
+        """Check if current time is within camera operation schedule (weekly)"""
         try:
-            current_time = datetime.now().time()
-            start_time = datetime.strptime(self.settings['camera_start_time'], '%H:%M').time()
-            end_time = datetime.strptime(self.settings['camera_end_time'], '%H:%M').time()
+            now = datetime.now()
+            current_day = now.strftime('%A').lower()  # e.g., "monday"
+            current_time = now.time()
+            
+            # Get schedule from settings
+            schedule = self.settings.get('schedule', {})
+            
+            # Get today's schedule config
+            today_schedule = schedule.get(current_day)
+            
+            # Check if enabled
+            if not today_schedule or not today_schedule.get('enabled', False):
+                print(f"\nSchedule check: {current_day.capitalize()} is disabled")
+                return False
+            
+            # Parse start and end times
+            start_time = datetime.strptime(today_schedule['start'], '%H:%M').time()
+            end_time = datetime.strptime(today_schedule['end'], '%H:%M').time()
             
             print(f"\nChecking schedule:")
+            print(f"Current day: {current_day.capitalize()}")
             print(f"Current time: {current_time}")
             print(f"Start time: {start_time}")
             print(f"End time: {end_time}")
             
-            # Convert times to minutes for easier comparison
-            current_minutes = current_time.hour * 60 + current_time.minute
-            start_minutes = start_time.hour * 60 + start_time.minute
-            end_minutes = end_time.hour * 60 + end_time.minute
+            # Handle overnight logic (e.g., 22:00 - 06:00)
+            if end_time < start_time:
+                # Overnight schedule: current_time >= start_time OR current_time <= end_time
+                is_within = (current_time >= start_time) or (current_time <= end_time)
+            else:
+                # Normal schedule: start_time <= current_time <= end_time
+                is_within = start_time <= current_time <= end_time
             
-            # Simple check: if current time is past end time, stop the camera
-            if current_minutes > end_minutes:
-                print("Current time is past end time, stopping camera")
-                return False
-            
-            # Check if we're within the schedule
-            is_within = start_minutes <= current_minutes <= end_minutes
             print(f"Within schedule: {is_within}")
             return is_within
         
         except Exception as e:
             print(f"Error checking schedule: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def _check_schedule_start(self):
@@ -500,20 +517,18 @@ class CameraController:
         
         while self.is_running:
             try:
-                # Get current time and end time
-                current_time = datetime.now().time()
-                end_time = datetime.strptime(self.settings['camera_end_time'], '%H:%M').time()
-                
-                # If current time is past end time, request stop (do NOT call stop_camera from this thread)
-                if current_time > end_time:
-                    print(f"End time reached: {end_time}, stopping camera (signal)")
+                # Check if we're still within schedule (weekly check)
+                if not self._is_within_schedule():
+                    print(f"Outside schedule, stopping camera (signal)")
                     self.is_running = False
                     break
                 
                 ret, frame = self.camera.read()
-                if (not ret) or (frame is None) or (getattr(frame, 'size', 0) == 0):
+                
+                # Natychmiast po self.camera.read() - guard clause dla pustych/nieprawidłowych klatek
+                if not ret or frame is None:
+                    print("Błąd odczytu klatki (pusta klatka), pomijanie...")
                     consecutive_failures += 1
-                    print("Error reading frame")
                     # Try to recover by re-opening the camera after a few failures
                     if consecutive_failures >= 5:
                         print("Too many read failures, attempting to reopen camera...")
@@ -534,11 +549,18 @@ class CameraController:
                             print(f"Error while reopening camera: {e}")
                             time.sleep(1)
                             continue
-                    else:
-                        time.sleep(1)
-                        continue
-                else:
-                    consecutive_failures = 0
+                    # Poczekaj chwilę, aby dać kamerze czas na odzyskanie
+                    time.sleep(0.1)
+                    continue  # Przeskocz do następnej iteracji pętli
+                
+                # Dodatkowa walidacja: sprawdź czy ramka ma wymiary
+                if getattr(frame, 'size', 0) == 0:
+                    print("Błąd odczytu klatki (ramka bez wymiarów), pomijanie...")
+                    consecutive_failures += 1
+                    time.sleep(0.1)
+                    continue
+                
+                consecutive_failures = 0
                 
                 # Validate frame before operations
                 if frame is None or not hasattr(frame, 'shape') or len(frame.shape) < 2:
@@ -559,7 +581,14 @@ class CameraController:
                 # Zamazywanie będzie robione OFFLINE przez AnonymizerWorker
                 # Wyświetlamy ORYGINALNĄ klatkę bez zamazania
                 try:
+                    # Validate frame is valid numpy array before copying
+                    if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+                        time.sleep(0.1)
+                        continue
                     display_frame = frame.copy()
+                    if display_frame.size == 0 or len(display_frame.shape) < 2:
+                        time.sleep(0.1)
+                        continue
                 except Exception as e:
                     print(f"Error copying frame: {e}")
                     time.sleep(0.1)
@@ -567,23 +596,35 @@ class CameraController:
 
                 # Update last_frame for MJPEG streaming (use original frame)
                 try:
-                    self.last_frame = frame.copy()
+                    # Validate frame before copying
+                    if frame is not None and isinstance(frame, np.ndarray) and frame.size > 0:
+                        self.last_frame = frame.copy()
                 except Exception as e:
                     print(f"Error updating last_frame: {e}")
-                    # Keep old frame if copy fails
+                    # Keep old frame if copy fails - don't update
                     pass
                 
                 # Run detection every 5 frames
                 frame_count += 1
                 if frame_count % 5 == 0 and self.model is not None:
                     try:
+                        # Validate display_frame exists and is valid before using
+                        if display_frame is None or display_frame.size == 0:
+                            continue
+                            
                         results = self.model(frame, verbose=False)  # Używa ORYGINALNEJ klatki
                         # Read ROI once per batch
                         roi = self.settings.get('roi_coordinates')
                         frame_height, frame_width = frame.shape[:2]
+                        
                         for result in results:
+                            if result.boxes is None:
+                                continue
                             boxes = result.boxes
                             for box in boxes:
+                                # Validate box has valid xyxy data
+                                if box.xyxy is None or len(box.xyxy) == 0 or len(box.xyxy[0]) < 4:
+                                    continue
                                 class_id = int(box.cls[0])
                                 confidence = float(box.conf[0])
                                 if class_id == self.phone_class_id and confidence >= self.settings['confidence_threshold']:
@@ -606,17 +647,49 @@ class CameraController:
 
                                     print(f"📱 Phone detected with confidence: {confidence}")
                                     x1, y1, x2, y2 = map(int, box.xyxy[0])
-                                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                                    cv2.putText(display_frame, f"Phone: {confidence:.2f}", (x1, y1 - 10),
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                    
+                                    # Validate and clamp coordinates to frame bounds
+                                    x1 = max(0, min(x1, frame_width - 1))
+                                    y1 = max(0, min(y1, frame_height - 1))
+                                    x2 = max(0, min(x2, frame_width - 1))
+                                    y2 = max(0, min(y2, frame_height - 1))
+                                    
+                                    # Ensure valid rectangle (x2 > x1, y2 > y1)
+                                    if x2 > x1 and y2 > y1:
+                                        try:
+                                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                                            # Clamp text position to avoid negative y
+                                            text_y = max(10, y1 - 10)
+                                            cv2.putText(display_frame, f"Phone: {confidence:.2f}", (x1, text_y),
+                                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                        except Exception as draw_err:
+                                            print(f"Error drawing phone box: {draw_err}")
+                                    
                                     # ZAPISZ ORYGINALNĄ klatkę (bez zamazanych twarzy)
-                                    self._handle_detection(frame.copy(), confidence)
+                                    try:
+                                        self._handle_detection(frame.copy(), confidence)
+                                    except Exception as copy_err:
+                                        print(f"Error copying frame for detection: {copy_err}")
                                 # Draw bounding box for person (tylko na wyświetlanej klatce)
                                 if class_id == 0 and confidence >= 0.5:  # 0 is 'person' in COCO
                                     x1, y1, x2, y2 = map(int, box.xyxy[0])
-                                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                                    cv2.putText(display_frame, f'Person: {confidence:.2f}', (x1, y1 - 10),
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                                    
+                                    # Validate and clamp coordinates to frame bounds
+                                    x1 = max(0, min(x1, frame_width - 1))
+                                    y1 = max(0, min(y1, frame_height - 1))
+                                    x2 = max(0, min(x2, frame_width - 1))
+                                    y2 = max(0, min(y2, frame_height - 1))
+                                    
+                                    # Ensure valid rectangle (x2 > x1, y2 > y1)
+                                    if x2 > x1 and y2 > y1:
+                                        try:
+                                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                                            # Clamp text position to avoid negative y
+                                            text_y = max(10, y1 - 10)
+                                            cv2.putText(display_frame, f'Person: {confidence:.2f}', (x1, text_y),
+                                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                                        except Exception as draw_err:
+                                            print(f"Error drawing person box: {draw_err}")
                     except Exception as e:
                         print(f"Error processing frame with YOLO: {e}")
                 

@@ -12,7 +12,7 @@ import numpy as np
 from ultralytics import YOLO
 import json
 import torch
-from models import db, User, Detection
+from models import db, User, Detection, Settings, DEFAULT_SCHEDULE
 from camera_controller import CameraController
 import logging
 from flask_migrate import Migrate
@@ -308,9 +308,11 @@ def get_settings():
     # Get available cameras
     available_cameras = CameraController.scan_available_cameras()
     
+    # Get schedule from controller settings (or default)
+    schedule = camera_controller.settings.get('schedule', DEFAULT_SCHEDULE.copy())
+    
     return jsonify({
-        'camera_start_time': camera_controller.settings['camera_start_time'],
-        'camera_end_time': camera_controller.settings['camera_end_time'],
+        'schedule': schedule,  # Weekly schedule JSON
         'blur_faces': camera_controller.settings['blur_faces'],
         'confidence_threshold': camera_controller.settings['confidence_threshold'],
         'camera_index': camera_controller.settings['camera_index'],
@@ -334,11 +336,29 @@ def update_settings():
     try:
         # Update camera controller settings
         camera_settings = {
-            'camera_start_time': data['camera_start_time'],
-            'camera_end_time': data['camera_end_time'],
-            'blur_faces': data['blur_faces'],
-            'confidence_threshold': data['confidence_threshold']
+            'blur_faces': data.get('blur_faces', camera_controller.settings.get('blur_faces', True)),
+            'confidence_threshold': data.get('confidence_threshold', camera_controller.settings.get('confidence_threshold', 0.2))
         }
+        
+        # Handle weekly schedule
+        if 'schedule' in data:
+            schedule = data['schedule']
+            # Validate schedule structure
+            days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            for day in days:
+                if day not in schedule:
+                    raise ValueError(f"Missing day in schedule: {day}")
+                day_config = schedule[day]
+                if 'enabled' not in day_config or 'start' not in day_config or 'end' not in day_config:
+                    raise ValueError(f"Invalid config for {day}")
+                # Validate time format
+                try:
+                    datetime.strptime(day_config['start'], '%H:%M')
+                    datetime.strptime(day_config['end'], '%H:%M')
+                except ValueError as e:
+                    raise ValueError(f"Invalid time format for {day}: {e}")
+            camera_settings['schedule'] = schedule
+            print(f"📅 Schedule updated: {schedule}")
         
         # Handle camera selection
         if 'camera_index' in data:
@@ -387,6 +407,8 @@ def update_settings():
         })
     except Exception as e:
         print(f"Error updating settings: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/camera/start', methods=['POST'])
@@ -434,8 +456,7 @@ def camera_status():
             'is_running': camera_controller.is_running,
             'within_schedule': camera_controller._is_within_schedule(),
             'settings': {
-                'camera_start_time': camera_controller.settings['camera_start_time'],
-                'camera_end_time': camera_controller.settings['camera_end_time'],
+                'schedule': camera_controller.settings.get('schedule', DEFAULT_SCHEDULE.copy()),
                 'camera_name': camera_controller.settings['camera_name']
             }
         })
@@ -468,19 +489,56 @@ def serve_detection_image(filename):
 PLACEHOLDER_IMG_PATH = 'static/images/looking.png'
 
 # Preload and encode placeholder once
+# Always create a fallback image - never let this fail
+def _create_fallback_placeholder():
+    """Create a fallback placeholder image with 'Camera Offline' text"""
+    try:
+        placeholder_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(
+            placeholder_frame, 
+            'Camera Offline', 
+            (160, 240), 
+            cv2.FONT_HERSHEY_SIMPLEX, 
+            1, 
+            (255, 255, 255), 
+            2
+        )
+        success, placeholder_buf = cv2.imencode('.jpg', placeholder_frame)
+        if success:
+            return placeholder_buf.tobytes()
+        else:
+            # If encoding fails, return empty bytes (shouldn't happen)
+            logger.warning("Failed to encode fallback placeholder")
+            return b''
+    except Exception as e:
+        logger.error(f"Critical error creating fallback placeholder: {e}")
+        # Last resort: return empty bytes (will cause frame errors but app won't crash)
+        return b''
+
+# Try to load the real placeholder image, fallback to generated one
+PLACEHOLDER_BYTES = None
 try:
     _ph_frame = cv2.imread(PLACEHOLDER_IMG_PATH)
-    if _ph_frame is None:
-        raise RuntimeError("Placeholder not found or unreadable")
-    _, _ph_buf = cv2.imencode('.jpg', _ph_frame)
+    if _ph_frame is None or _ph_frame.size == 0:
+        raise RuntimeError(f"Placeholder image not found or unreadable: {PLACEHOLDER_IMG_PATH}")
+    success, _ph_buf = cv2.imencode('.jpg', _ph_frame)
+    if not success:
+        raise RuntimeError("Failed to encode placeholder image")
     PLACEHOLDER_BYTES = _ph_buf.tobytes()
+    logger.info(f"✅ Loaded placeholder image from {PLACEHOLDER_IMG_PATH}")
 except Exception as e:
-    print(f"Error loading placeholder image: {e}")
-    # Create black fallback with text
-    _ph_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(_ph_frame, 'Camera Offline', (160, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-    _, _ph_buf = cv2.imencode('.jpg', _ph_frame)
-    PLACEHOLDER_BYTES = _ph_buf.tobytes()
+    logger.warning(f"⚠️ Error loading placeholder image ({PLACEHOLDER_IMG_PATH}): {e}")
+    logger.info("Creating fallback placeholder image...")
+    PLACEHOLDER_BYTES = _create_fallback_placeholder()
+    if PLACEHOLDER_BYTES:
+        logger.info("✅ Fallback placeholder created successfully")
+    else:
+        logger.error("❌ Failed to create fallback placeholder - video stream may fail")
+
+# Ensure PLACEHOLDER_BYTES is never None
+if PLACEHOLDER_BYTES is None:
+    logger.error("CRITICAL: PLACEHOLDER_BYTES is None, creating emergency fallback...")
+    PLACEHOLDER_BYTES = _create_fallback_placeholder()
 
 def generate_frames():
     """Yield JPEG frames as multipart for MJPEG streaming with privacy Canny filter and offline placeholder."""
