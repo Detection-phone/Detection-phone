@@ -485,8 +485,8 @@ def serve_detection_image(filename):
 # =========================
 # Camera MJPEG video stream
 # =========================
-# Placeholder image (Garfield) path
-PLACEHOLDER_IMG_PATH = 'static/images/looking.png'
+# Placeholder image (Garfield) path - use absolute path
+PLACEHOLDER_IMG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'images', 'looking.png')
 
 # Preload and encode placeholder once
 # Always create a fallback image - never let this fail
@@ -518,16 +518,20 @@ def _create_fallback_placeholder():
 # Try to load the real placeholder image, fallback to generated one
 PLACEHOLDER_BYTES = None
 try:
+    # Check if file exists first
+    if not os.path.exists(PLACEHOLDER_IMG_PATH):
+        raise FileNotFoundError(f"Placeholder image not found: {PLACEHOLDER_IMG_PATH}")
+    
     _ph_frame = cv2.imread(PLACEHOLDER_IMG_PATH)
     if _ph_frame is None or _ph_frame.size == 0:
-        raise RuntimeError(f"Placeholder image not found or unreadable: {PLACEHOLDER_IMG_PATH}")
+        raise RuntimeError(f"Placeholder image not readable: {PLACEHOLDER_IMG_PATH}")
     success, _ph_buf = cv2.imencode('.jpg', _ph_frame)
     if not success:
         raise RuntimeError("Failed to encode placeholder image")
     PLACEHOLDER_BYTES = _ph_buf.tobytes()
     logger.info(f"✅ Loaded placeholder image from {PLACEHOLDER_IMG_PATH}")
 except Exception as e:
-    logger.warning(f"⚠️ Error loading placeholder image ({PLACEHOLDER_IMG_PATH}): {e}")
+    logger.debug(f"Placeholder image not available ({PLACEHOLDER_IMG_PATH}): {e}. Using fallback.")
     logger.info("Creating fallback placeholder image...")
     PLACEHOLDER_BYTES = _create_fallback_placeholder()
     if PLACEHOLDER_BYTES:
@@ -541,33 +545,50 @@ if PLACEHOLDER_BYTES is None:
     PLACEHOLDER_BYTES = _create_fallback_placeholder()
 
 def generate_frames():
-    """Yield JPEG frames as multipart for MJPEG streaming with privacy Canny filter and offline placeholder."""
+    """Yield JPEG frames as multipart for MJPEG streaming with privacy Canny filter and offline placeholder.
+    
+    Odporna na wyścig wątków - jeśli _camera_loop podmieni self.last_frame na None w trakcie
+    przetwarzania, cała operacja jest opakowana w try...except dla bezpieczeństwa.
+    """
     while True:
         try:
-            # Get raw frame from controller
-            frame = None
-            try:
-                frame = camera_controller.get_last_frame()
-            except Exception:
-                frame = None
-
+            frame = camera_controller.get_last_frame() 
+            
             if frame is None:
+                # Jeśli klatka jest 'None', wyślij placeholder
                 frame_bytes = PLACEHOLDER_BYTES
             else:
+                # Spróbuj przetworzyć klatkę. To może się nie udać,
+                # jeśli Wątek 1 podmieni ją na 'None' w trakcie.
                 try:
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    edges = cv2.Canny(gray, 100, 200)
-                    edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-                    ok, buf = cv2.imencode('.jpg', edges_bgr)
-                    frame_bytes = buf.tobytes() if ok else PLACEHOLDER_BYTES
+                    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    edges = cv2.Canny(gray_frame, 100, 200)
+                    edges_color = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+                    
+                    ret, buffer = cv2.imencode('.jpg', edges_color)
+                    if not ret:
+                        frame_bytes = PLACEHOLDER_BYTES  # Fallback
+                    else:
+                        frame_bytes = buffer.tobytes()
                 except Exception as proc_err:
-                    print(f"Error processing Canny filter: {proc_err}")
+                    # Błąd podczas przetwarzania (np. frame zmienił się w trakcie)
+                    print(f"BŁĄD W WĄTKU STREAMINGU (przetwarzanie Canny): {proc_err}")
                     frame_bytes = PLACEHOLDER_BYTES
 
+        except Exception as e:
+            # Jeśli cokolwiek pójdzie nie tak (np. cv::Mat::Mat, wyścig wątków),
+            # złap błąd i wyślij placeholder, zamiast zawieszać wątek.
+            print(f"BŁĄD W WĄTKU STREAMINGU (generate_frames): {e}")
+            frame_bytes = PLACEHOLDER_BYTES
+        
+        # Zawsze coś wysyłaj, aby utrzymać połączenie
+        try:
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.05)  # ~20 FPS to reduce CPU
-        except Exception:
+            time.sleep(0.05)  # Ok. 20 FPS
+        except Exception as yield_err:
+            # Jeśli yield się nie powiedzie, poczekaj i spróbuj ponownie
+            print(f"BŁĄD W WĄTKU STREAMINGU (yield): {yield_err}")
             time.sleep(0.1)
             continue
 

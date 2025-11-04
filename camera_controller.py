@@ -81,8 +81,8 @@ class CameraController:
         # Initialize YOLO model
         try:
             print("Loading YOLO model...")
-            self.model = YOLO('yolov8m.pt')
-            print("YOLO model loaded successfully")
+            self.model = YOLO('yolov8s.pt')
+            print("YOLO model loaded successfully (yolov8s.pt - Small)")
             
             # Find phone class ID
             self.phone_class_id = None
@@ -98,6 +98,12 @@ class CameraController:
         except Exception as e:
             print(f"Error loading YOLO model: {e}")
             self.model = None
+
+        # Frame skipping configuration for performance optimization
+        self.frame_counter = 0
+        # Będziemy analizować co 10. klatkę (dla 30 FPS = 3 detekcje na sekundę)
+        self.process_every_n_frame = 10
+        print(f"Frame skipping enabled: processing every {self.process_every_n_frame} frames")
 
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
@@ -512,7 +518,6 @@ class CameraController:
     def _camera_loop(self):
         """Main camera loop for capturing and processing frames"""
         print("Starting camera loop...")
-        frame_count = 0
         consecutive_failures = 0
         
         while self.is_running:
@@ -523,11 +528,47 @@ class CameraController:
                     self.is_running = False
                     break
                 
+                # Sprawdzenie, czy kamera jest otwarta
+                if not self.camera or not self.camera.isOpened():
+                    print("Camera is not opened, attempting to reopen...")
+                    try:
+                        if self.camera is not None:
+                            self.camera.release()
+                        self.camera = self._open_capture(self.camera_index)
+                        if self.camera is None or not self.camera.isOpened():
+                            print("Failed to reopen camera, waiting...")
+                            time.sleep(1)
+                            continue
+                        # Reset properties after reopen
+                        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                        print("Camera reopened successfully")
+                    except Exception as e:
+                        print(f"Error reopening camera: {e}")
+                        time.sleep(1)
+                        continue
+                
                 ret, frame = self.camera.read()
                 
-                # Natychmiast po self.camera.read() - guard clause dla pustych/nieprawidłowych klatek
-                if not ret or frame is None:
-                    print("Błąd odczytu klatki (pusta klatka), pomijanie...")
+                # KULODOODPORNY GUARD CLAUSE: Sprawdzenie MUSI być tutaj, BEZPOŚREDNIO po read()
+                # Przed ustawieniem self.last_frame - zapobiega wyścigowi wątków
+                # Sprawdzamy ret, None i rozmiar klatki (uszkodzone klatki z Iriun mogą mieć ret=True ale size=0)
+                frame_is_invalid = False
+                try:
+                    # Sprawdź podstawowe warunki
+                    if not ret or frame is None:
+                        frame_is_invalid = True
+                    else:
+                        # Sprawdź czy klatka ma prawidłowy rozmiar (uszkodzone klatki mogą mieć size=0)
+                        if not hasattr(frame, 'size') or frame.size == 0:
+                            frame_is_invalid = True
+                except Exception as e:
+                    # Jeśli jakakolwiek walidacja się nie powiedzie, klatka jest nieprawidłowa
+                    print(f"Błąd walidacji klatki (nieoczekiwany): {e}")
+                    frame_is_invalid = True
+                
+                if frame_is_invalid:
+                    print("Ostrzeżenie: Pusta lub uszkodzona klatka (ret=False, frame=None lub frame.size=0). Pomijanie.")
                     consecutive_failures += 1
                     # Try to recover by re-opening the camera after a few failures
                     if consecutive_failures >= 5:
@@ -549,31 +590,30 @@ class CameraController:
                             print(f"Error while reopening camera: {e}")
                             time.sleep(1)
                             continue
-                    # Poczekaj chwilę, aby dać kamerze czas na odzyskanie
+                    # Daj kamerze chwilę na odzyskanie
                     time.sleep(0.1)
-                    continue  # Przeskocz do następnej iteracji pętli
+                    continue  # Przeskocz do następnej iteracji pętli - NIE ustawiamy last_frame!
                 
-                # Dodatkowa walidacja: sprawdź czy ramka ma wymiary
-                if getattr(frame, 'size', 0) == 0:
-                    print("Błąd odczytu klatki (ramka bez wymiarów), pomijanie...")
-                    consecutive_failures += 1
-                    time.sleep(0.1)
-                    continue
-                
+                # Dopiero teraz klatka jest bezpieczna - ustawiamy last_frame PRZED wszystkimi innymi operacjami
                 consecutive_failures = 0
-                
-                # Validate frame before operations
-                if frame is None or not hasattr(frame, 'shape') or len(frame.shape) < 2:
+                try:
+                    self.last_frame = frame.copy()
+                except Exception as e:
+                    print(f"Error copying frame to last_frame: {e}")
                     time.sleep(0.1)
                     continue
                 
-                # Validate frame dimensions
+                # Dodatkowa walidacja: sprawdź szczegółowe wymiary klatki (shape)
+                # (Podstawowa walidacja size już została wykonana w guard clause powyżej)
                 try:
+                    # Validate frame dimensions (wysokość i szerokość)
                     h, w = frame.shape[:2]
                     if h == 0 or w == 0:
+                        print("Błąd odczytu klatki (zerowe wymiary shape), pomijanie...")
                         time.sleep(0.1)
                         continue
-                except (AttributeError, IndexError, TypeError):
+                except (AttributeError, IndexError, TypeError) as e:
+                    print(f"Błąd walidacji wymiarów klatki: {e}")
                     time.sleep(0.1)
                     continue
                 
@@ -581,32 +621,24 @@ class CameraController:
                 # Zamazywanie będzie robione OFFLINE przez AnonymizerWorker
                 # Wyświetlamy ORYGINALNĄ klatkę bez zamazania
                 try:
-                    # Validate frame is valid numpy array before copying
-                    if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
-                        time.sleep(0.1)
-                        continue
                     display_frame = frame.copy()
-                    if display_frame.size == 0 or len(display_frame.shape) < 2:
-                        time.sleep(0.1)
-                        continue
                 except Exception as e:
-                    print(f"Error copying frame: {e}")
+                    print(f"Error copying frame for display: {e}")
                     time.sleep(0.1)
                     continue
-
-                # Update last_frame for MJPEG streaming (use original frame)
-                try:
-                    # Validate frame before copying
-                    if frame is not None and isinstance(frame, np.ndarray) and frame.size > 0:
-                        self.last_frame = frame.copy()
-                except Exception as e:
-                    print(f"Error updating last_frame: {e}")
-                    # Keep old frame if copy fails - don't update
-                    pass
                 
-                # Run detection every 5 frames
-                frame_count += 1
-                if frame_count % 5 == 0 and self.model is not None:
+                # Increment frame counter for skipping logic
+                self.frame_counter += 1
+                
+                # --- KLUCZOWA LOGIKA POMIJANIA KLATEK ---
+                # Jeśli to nie jest co 10. klatka, przeskocz do następnej iteracji
+                # To pozwala na płynne działanie streamu, a detekcję wykonujemy tylko co 10. klatkę
+                if self.frame_counter % self.process_every_n_frame != 0:
+                    continue  # Pomiń detekcję dla tej klatki, ale stream działa normalnie
+                
+                # --- TEN KOD WYKONA SIĘ TERAZ TYLKO CO 10. KLATKĘ ---
+                # (Zakładając 30 FPS = 3 detekcje na sekundę)
+                if self.model is not None:
                     try:
                         # Validate display_frame exists and is valid before using
                         if display_frame is None or display_frame.size == 0:
@@ -700,9 +732,17 @@ class CameraController:
                 
                 # AnonymizerWorker przetwarza kolejkę automatycznie w tle
                 
+            except cv2.error as e:
+                # Specjalna obsługa błędów OpenCV (np. cv::Mat::Mat)
+                print(f"BŁĄD KRYTYCZNY OpenCV (cv::Mat::Mat?) w pętli kamery: {e}")
+                print("Pominięcie klatki i kontynuacja...")
+                time.sleep(0.5)  # Dłuższa pauza
+                continue
             except Exception as e:
-                print(f"Error in camera loop: {e}")
+                # Łapanie wszystkich innych błędów
+                print(f"Nieoczekiwany błąd w pętli kamery: {e}")
                 time.sleep(1)
+                continue
         
         # Cleanup only capture here (no GUI operations in worker thread)
         try:
@@ -882,7 +922,7 @@ class AnonymizerWorker(threading.Thread):
         
         try:
             # Załaduj model YOLOv8 (ten sam, który wykrywa telefony)
-            self.model = YOLO('yolov8m.pt')
+            self.model = YOLO('yolov8n.pt')
             print("✅ YOLOv8 zainicjalizowany dla anonimizacji")
             print(f"   Zamazywanie górnych {int(self.upper_body_ratio * 100)}% ciała osoby")
         except Exception as e:
