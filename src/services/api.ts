@@ -73,9 +73,19 @@ export interface Detection {
   status: string;
 }
 
+export interface PaginatedDetectionsResponse {
+  detections: Detection[];
+  total_pages: number;
+  current_page: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
 export const detectionAPI = {
-  getAll: async (): Promise<Detection[]> => {
-    const response = await api.get<Detection[]>('/api/detections');
+  getAll: async (page: number = 1, perPage: number = 20): Promise<PaginatedDetectionsResponse> => {
+    const response = await api.get<PaginatedDetectionsResponse>('/api/detections', {
+      params: { page, per_page: perPage }
+    });
     return response.data;
   },
   
@@ -86,6 +96,13 @@ export const detectionAPI = {
   
   delete: async (id: number) => {
     const response = await api.delete(`/api/detections/${id}`);
+    return response.data;
+  },
+  
+  deleteBatch: async (ids: (number | string)[]) => {
+    const response = await api.delete('/api/detections/batch', {
+      data: { ids }
+    });
     return response.data;
   },
   

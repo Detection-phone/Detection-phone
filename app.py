@@ -149,15 +149,28 @@ def logout_api():
 @app.route('/api/detections', methods=['GET'])
 @login_required
 def get_detections():
-    detections = Detection.query.order_by(Detection.timestamp.desc()).all()
-    return jsonify([{
-        'id': d.id,
-        'timestamp': d.timestamp.isoformat(),
-        'location': d.location,
-        'confidence': d.confidence,
-        'image_path': os.path.basename(d.image_path),
-        'status': d.status
-    } for d in detections])
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    
+    pagination = Detection.query.order_by(Detection.timestamp.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    detections = pagination.items
+    
+    return jsonify({
+        'detections': [{
+            'id': d.id,
+            'timestamp': d.timestamp.isoformat(),
+            'location': d.location,
+            'confidence': d.confidence,
+            'image_path': os.path.basename(d.image_path),
+            'status': d.status
+        } for d in detections],
+        'total_pages': pagination.pages,
+        'current_page': pagination.page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev
+    })
 
 @app.route('/api/detections/<int:detection_id>', methods=['GET'])
 @login_required
@@ -180,6 +193,29 @@ def delete_detection(detection_id: int):
     db.session.delete(d)
     db.session.commit()
     return jsonify({'message': 'Detection deleted successfully'})
+
+@app.route('/api/detections/batch', methods=['DELETE'])
+@login_required
+def delete_many_detections():
+    data = request.get_json()
+    ids_to_delete = data.get('ids', [])
+
+    if not ids_to_delete:
+        return jsonify({'message': 'Brak ID do usunięcia.'}), 400
+
+    try:
+        # Konwertuj ID na int jeśli są stringami
+        ids_to_delete = [int(id) if isinstance(id, str) else id for id in ids_to_delete]
+        
+        # Usuń detekcje z bazy
+        num_deleted = Detection.query.filter(Detection.id.in_(ids_to_delete)).delete(synchronize_session=False)
+        db.session.commit()
+
+        return jsonify({'message': f'Usunięto {num_deleted} detekcji.', 'deleted_count': num_deleted}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error deleting detections: {e}")
+        return jsonify({'message': f'Błąd podczas usuwania detekcji: {str(e)}'}), 500
 
 @app.route('/api/dashboard-stats', methods=['GET'])
 @login_required

@@ -24,6 +24,9 @@ import {
   CircularProgress,
   Alert,
   Snackbar,
+  Pagination,
+  Stack,
+  Checkbox,
 } from '@mui/material';
 import {
   GridView,
@@ -52,27 +55,33 @@ const Detections: React.FC = () => {
   const [selectedDetection, setSelectedDetection] = useState<Detection | null>(null);
   const [openDialog, setOpenDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [selectedDetections, setSelectedDetections] = useState<Set<number>>(new Set());
+  const [isSelectAll, setIsSelectAll] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
     severity: 'success' | 'error';
   }>({ open: false, message: '', severity: 'success' });
 
-  // ✅ FIXED: Fetch detections from API
+  // ✅ FIXED: Fetch detections from API with pagination
   useEffect(() => {
     fetchDetections();
     const intervalId = setInterval(() => {
       fetchDetections();
     }, 20000); // 20s polling to keep list fresh
     return () => clearInterval(intervalId);
-  }, []);
+  }, [page]);
 
   const fetchDetections = async () => {
     try {
       setLoading(true);
-      const data = await detectionAPI.getAll();
-      setDetections(data);
-      console.log('✅ Detections loaded:', data.length, 'items');
+      const response = await detectionAPI.getAll(page, 20);
+      setDetections(response.detections);
+      setTotalPages(response.total_pages);
+      console.log('✅ Detections loaded:', response.detections.length, 'items (page', page, 'of', response.total_pages, ')');
       setError(null);
     } catch (err: any) {
       console.error('❌ Failed to fetch detections:', err);
@@ -153,6 +162,84 @@ const Detections: React.FC = () => {
     }
   };
 
+  // Batch selection handlers
+  const handleToggleSelection = (detectionId: number) => {
+    setSelectedDetections(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(detectionId)) {
+        newSet.delete(detectionId);
+      } else {
+        newSet.add(detectionId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    setIsSelectAll(checked);
+    if (checked) {
+      const allIds = new Set(detections.map(d => d.id));
+      setSelectedDetections(allIds);
+    } else {
+      // Usuń tylko ID z aktualnej strony
+      const currentPageIds = new Set(detections.map(d => d.id));
+      setSelectedDetections(prev => {
+        const newSet = new Set(prev);
+        currentPageIds.forEach(id => newSet.delete(id));
+        return newSet;
+      });
+    }
+  };
+
+  // Automatycznie aktualizuj isSelectAll gdy zmienia się selectedDetections
+  useEffect(() => {
+    if (detections.length === 0) {
+      setIsSelectAll(false);
+      return;
+    }
+    const currentPageIds = new Set(detections.map(d => d.id));
+    const allSelected = Array.from(currentPageIds).every(id => selectedDetections.has(id));
+    setIsSelectAll(allSelected);
+  }, [selectedDetections, detections]);
+
+  // Wyczyść zaznaczenie przy zmianie strony
+  useEffect(() => {
+    setSelectedDetections(new Set());
+    setIsSelectAll(false);
+  }, [page]);
+
+  // Batch delete handler
+  const handleDeleteSelected = async () => {
+    const idsToDelete = Array.from(selectedDetections);
+    if (idsToDelete.length === 0) return;
+
+    try {
+      console.log('🗑️ Deleting detections:', idsToDelete);
+      await detectionAPI.deleteBatch(idsToDelete);
+      
+      // Odśwież stronę
+      await fetchDetections();
+      
+      // Wyczyść zaznaczenie
+      setSelectedDetections(new Set());
+      setIsSelectAll(false);
+      setDeleteDialogOpen(false);
+      
+      setSnackbar({
+        open: true,
+        message: `Usunięto ${idsToDelete.length} detekcji.`,
+        severity: 'success',
+      });
+    } catch (error) {
+      console.error('❌ Batch delete failed:', error);
+      setSnackbar({
+        open: true,
+        message: 'Nie udało się usunąć detekcji',
+        severity: 'error',
+      });
+    }
+  };
+
   const getConfidenceColor = (confidenceFraction: number) => {
     const confidencePercent = confidenceFraction * 100;
     if (confidencePercent > 70) return 'success';
@@ -198,6 +285,30 @@ const Detections: React.FC = () => {
                   e.target.src = 'https://via.placeholder.com/300x200?text=No+Image';
                 }}
               />
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: 8,
+                  left: 8,
+                  backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.9),
+                  borderRadius: 1,
+                }}
+              >
+                <Checkbox
+                  checked={selectedDetections.has(detection.id)}
+                  onChange={(e) => {
+                    e.stopPropagation();
+                    handleToggleSelection(detection.id);
+                  }}
+                  size="small"
+                  sx={{
+                    color: 'white',
+                    '&.Mui-checked': {
+                      color: 'primary.main',
+                    },
+                  }}
+                />
+              </Box>
               <Box
                 sx={{
                   position: 'absolute',
@@ -430,10 +541,32 @@ const Detections: React.FC = () => {
             gap: 2,
           }}
         >
-          <Typography variant="h5" sx={{ fontWeight: 600 }}>
-            All Detections {detections.length > 0 && `(${detections.length})`}
-        </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            {detections.length > 0 && (
+              <Checkbox
+                checked={isSelectAll}
+                indeterminate={selectedDetections.size > 0 && !isSelectAll}
+                onChange={(e) => handleSelectAll(e.target.checked)}
+                size="small"
+              />
+            )}
+            <Typography variant="h5" sx={{ fontWeight: 600 }}>
+              All Detections {detections.length > 0 && `(${detections.length})`}
+              {selectedDetections.size > 0 && ` - Zaznaczono: ${selectedDetections.size}`}
+            </Typography>
+          </Box>
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+            {selectedDetections.size > 0 && (
+              <Button
+                variant="contained"
+                color="error"
+                size="small"
+                startIcon={<Delete />}
+                onClick={() => setDeleteDialogOpen(true)}
+              >
+                Usuń zaznaczone ({selectedDetections.size})
+              </Button>
+            )}
             <TextField
               size="small"
               placeholder="Search detections..."
@@ -505,6 +638,18 @@ const Detections: React.FC = () => {
             }}
           />
         </Paper>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 0 && (
+        <Stack spacing={2} alignItems="center" sx={{ mt: 3, mb: 2 }}>
+          <Pagination 
+            count={totalPages} 
+            page={page} 
+            onChange={(event, value) => setPage(value)} 
+            color="primary" 
+          />
+        </Stack>
       )}
 
       {/* Detail Dialog */}
@@ -670,6 +815,42 @@ const Detections: React.FC = () => {
             </DialogActions>
           </>
         )}
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={() => setDeleteDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 600 }}>
+          Potwierdź usunięcie
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Czy na pewno chcesz usunąć <strong>{selectedDetections.size}</strong> {selectedDetections.size === 1 ? 'zaznaczoną detekcję' : 'zaznaczonych detekcji'}?
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            Ta operacja jest nieodwracalna.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setDeleteDialogOpen(false)}
+            color="inherit"
+          >
+            Anuluj
+          </Button>
+          <Button
+            onClick={handleDeleteSelected}
+            variant="contained"
+            color="error"
+            startIcon={<Delete />}
+          >
+            Usuń
+          </Button>
+        </DialogActions>
       </Dialog>
 
       {/* Snackbar for notifications */}
