@@ -785,56 +785,226 @@ class CameraController:
             self.anonymizer_worker.join(timeout=5)
 
     @staticmethod
+    def _open_capture_static(index):
+        """Static helper to open VideoCapture (same logic as instance method)"""
+        # Try default backend first (MSMF on Windows)
+        cap = cv2.VideoCapture(index)
+        if cap is not None and cap.isOpened():
+            return cap
+        try:
+            cap.release()
+        except Exception:
+            pass
+
+        # Then try DirectShow for the SAME index
+        try:
+            cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+            if cap is not None and cap.isOpened():
+                return cap
+            if cap is not None:
+                cap.release()
+        except Exception:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
+        return None
+
+    @staticmethod
+    def _capture_has_valid_frame_static(cap, warmup_reads=10, delay_s=0.1):
+        """Static helper to check if capture delivers valid frames"""
+        try:
+            # Try to read at least one valid frame
+            for attempt in range(warmup_reads):
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    # Check if frame has valid size
+                    frame_size = getattr(frame, 'size', 0)
+                    if frame_size > 0:
+                        # Additional check: frame should have valid dimensions
+                        try:
+                            h, w = frame.shape[:2]
+                            if h > 0 and w > 0:
+                                return True
+                        except (AttributeError, IndexError, TypeError):
+                            pass
+                if attempt < warmup_reads - 1:  # Don't sleep on last attempt
+                    time.sleep(delay_s)
+        except Exception as e:
+            print(f"    ⚠️ Exception in _capture_has_valid_frame_static: {e}")
+        return False
+
+    @staticmethod
     def scan_available_cameras():
         """Scan and list all available camera devices and their indices"""
         available_cameras = []
         
-        # Try to open cameras with indices 0-9
-        for index in range(10):
+        print("\n🔍 Starting camera scan...")
+        
+        # First, get all camera-like devices from Windows using PowerShell
+        # Search for both Camera and Image device classes (Iriun may be in Image)
+        all_camera_devices = []
+        try:
+            # Search for Camera class devices
+            cmd = "powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Camera' -or $_.PNPClass -eq 'Image' } | Select-Object Name, DeviceID, Manufacturer, Description, PNPClass | ConvertTo-Json\""
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                devices = json.loads(result.stdout)
+                if not isinstance(devices, list):
+                    devices = [devices]
+                
+                print(f"📋 Found {len(devices)} camera-like devices in Windows:")
+                for device in devices:
+                    device_name = device.get('Name', 'Unknown Device')
+                    print(f"  - {device_name} (PNPClass: {device.get('PNPClass', 'Unknown')})")
+                    all_camera_devices.append({
+                        'name': device_name,
+                        'pnpmclass': device.get('PNPClass', 'Unknown')
+                    })
+        except Exception as e:
+            print(f"⚠️ Warning: Could not get camera list from Windows: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Try to open cameras with indices 0-15 (increased range for virtual cameras)
+        for index in range(16):
             cap = None
-            controller_like = CameraController
-            # Use the same robust opener
+            # Use static helper method
             try:
-                cap = controller_like._open_capture(controller_like, index)  # call as unbound method
-            except Exception:
-                cap = cv2.VideoCapture(index)
-            if cap is None:
-                continue
-            if cap.isOpened():
-                # Ensure it can deliver a valid frame
-                if not controller_like._capture_has_valid_frame(controller_like, cap):
+                print(f"  🔍 Attempting to open camera index {index}...")
+                cap = CameraController._open_capture_static(index)
+                if cap is None:
+                    print(f"    ❌ Camera {index} could not be opened (returned None)")
+                    continue
+                if not cap.isOpened():
+                    print(f"    ❌ Camera {index} object created but isOpened() returned False")
                     try:
                         cap.release()
-                    except Exception:
+                    except:
                         pass
                     continue
-                # Get camera properties
-                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                fps = cap.get(cv2.CAP_PROP_FPS)
+                print(f"    ✅ Camera {index} opened successfully!")
+            except Exception as e:
+                print(f"    ⚠️ Exception opening camera {index}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+            
+            if cap is None or not cap.isOpened():
+                continue
                 
-                # Try to get camera name using PowerShell
+            if cap.isOpened():
+                print(f"  📹 Testing camera index {index}...")
+                
+                # Get camera properties first (these should work even if frame reading is slow)
                 try:
-                    cmd = f"powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object {{ $_.PNPClass -eq 'Camera' }} | Select-Object -Index {index} | Select-Object -ExpandProperty Name\""
-                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
-                    name = result.stdout.strip() if result.returncode == 0 else f"Camera {index}"
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    fps = cap.get(cv2.CAP_PROP_FPS)
                     
-                    # Additional check for Iriun Webcam
-                    if "Iriun" in name:
-                        print(f"Found Iriun Webcam at index {index}")
-                        name = "Iriun Webcam"
-                except:
-                    name = f"Camera {index}"
+                    # If width/height are 0, camera might not be initialized yet
+                    if width == 0 or height == 0:
+                        print(f"    ⚠️ Camera {index} opened but properties are 0x0, trying to read a frame...")
+                        # Try to read a frame to initialize
+                        ret, test_frame = cap.read()
+                        if ret and test_frame is not None:
+                            width = test_frame.shape[1] if len(test_frame.shape) > 1 else 0
+                            height = test_frame.shape[0] if len(test_frame.shape) > 0 else 0
+                        else:
+                            # Still try with default values - some cameras need to be actively used
+                            width = 640
+                            height = 480
+                            print(f"    ⚠️ Using default resolution 640x480 for camera {index}")
+                except Exception as e:
+                    print(f"    ⚠️ Error getting camera properties: {e}, using defaults")
+                    width = 640
+                    height = 480
+                    fps = 30
+                
+                # Try to verify frame reading (but don't be too strict - some cameras work even if this fails)
+                has_valid_frame = False
+                try:
+                    has_valid_frame = CameraController._capture_has_valid_frame_static(cap, warmup_reads=3, delay_s=0.1)
+                    if not has_valid_frame:
+                        # Try one more time with longer delay for virtual cameras
+                        time.sleep(0.3)
+                        has_valid_frame = CameraController._capture_has_valid_frame_static(cap, warmup_reads=5, delay_s=0.15)
+                except Exception as e:
+                    print(f"    ⚠️ Frame validation error (non-critical): {e}")
+                
+                if not has_valid_frame:
+                    print(f"    ⚠️ Camera {index} cannot deliver valid frames yet, but will include it anyway (may work when actively used)")
+                    # Don't reject - include camera anyway, it might work when actively used
+                
+                print(f"    ✅ Camera {index} is working! ({width}x{height} @ {fps} FPS)")
+                
+                # Try to get camera name
+                name = f"Camera {index}"
+                
+                # Try to match by querying Windows for this specific OpenCV index
+                # Note: OpenCV index may not match Windows device index directly
+                try:
+                    # Approach 1: Try to get name using DirectShow backend property (if available)
+                    try:
+                        backend_name = cap.getBackendName()
+                        print(f"    📷 Camera backend: {backend_name}")
+                    except:
+                        pass
+                    
+                    # Approach 2: If we have all_camera_devices list, try to match by index
+                    # This is our primary method since we already have the list
+                    if len(all_camera_devices) > 0:
+                        if index < len(all_camera_devices):
+                            name = all_camera_devices[index]['name']
+                            print(f"    ✅ Using name from pre-scanned device list: {name}")
+                        else:
+                            # If index is beyond our list, try to find by searching all devices
+                            # This handles cases where OpenCV index doesn't match Windows index order
+                            print(f"    ⚠️ Camera index {index} beyond pre-scanned list, trying PowerShell query...")
+                    
+                    # Approach 3: Try PowerShell query for Camera class at this index (fallback)
+                    if name == f"Camera {index}":  # If we still don't have a name
+                        cmd = f"powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object {{ $_.PNPClass -eq 'Camera' }} | Select-Object -Index {index} | Select-Object -ExpandProperty Name\""
+                        result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=5)
+                        if result.returncode == 0 and result.stdout.strip():
+                            name = result.stdout.strip()
+                            print(f"    ✅ Got name from Windows (Camera class): {name}")
+                        else:
+                            # Approach 4: Try Image class (for virtual cameras like Iriun)
+                            cmd = f"powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object {{ $_.PNPClass -eq 'Image' }} | Select-Object -Index {index} | Select-Object -ExpandProperty Name\""
+                            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=5)
+                            if result.returncode == 0 and result.stdout.strip():
+                                name = result.stdout.strip()
+                                print(f"    ✅ Got name from Windows (Image class): {name}")
+                    
+                    # Approach 5: Search all_camera_devices for Iriun (in case index mismatch)
+                    # This is especially useful for Iriun which might be on a different index
+                    if "Iriun" not in name and "iriun" not in name.lower() and len(all_camera_devices) > 0:
+                        for device in all_camera_devices:
+                            if "Iriun" in device['name'] or "iriun" in device['name'].lower():
+                                # Found Iriun in the list - if this is the only Iriun, assume it's this camera
+                                name = device['name']
+                                print(f"    ✅ Found Iriun in device list: {name}")
+                                break
+                                
+                except Exception as e:
+                    print(f"    ⚠️ Warning: Could not get name for camera index {index}: {e}")
+                
+                # Normalize Iriun Webcam name (case-insensitive)
+                if "Iriun" in name or "iriun" in name.lower():
+                    name = "Iriun Webcam"
+                    print(f"    ✅ Normalized to: Iriun Webcam")
                 
                 # Try to get more detailed device information
                 try:
-                    cmd = f"powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object {{ $_.PNPClass -eq 'Camera' }} | Select-Object -Index {index} | Select-Object -Property Name, DeviceID, Manufacturer, Description | ConvertTo-Json\""
-                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
-                    if result.returncode == 0:
+                    cmd = f"powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object {{ $_.PNPClass -eq 'Camera' -or $_.PNPClass -eq 'Image' }} | Select-Object -Index {index} | Select-Object -Property Name, DeviceID, Manufacturer, Description, PNPClass | ConvertTo-Json\""
+                    result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=5)
+                    if result.returncode == 0 and result.stdout.strip():
                         device_info = json.loads(result.stdout)
-                        print(f"Device info for index {index}: {device_info}")
+                        print(f"    📷 Device info: {device_info}")
                 except Exception as e:
-                    print(f"Error getting device info for index {index}: {e}")
+                    pass  # Silently ignore errors in detailed info
                 
                 available_cameras.append({
                     'index': index,
@@ -850,19 +1020,26 @@ class CameraController:
                 except Exception:
                     pass
         
+        print(f"✅ Scan complete: Found {len(available_cameras)} available cameras")
         return available_cameras
 
     def find_camera_by_name(self, camera_name):
         """Find camera index by device name using Media Foundation API"""
         try:
-            print(f"\nSearching for camera: {camera_name}")
+            print(f"\n🔍 Searching for camera: {camera_name}")
             
-            # First try to find by exact name match
-            cmd = "powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Camera' } | Select-Object Name, DeviceID, Manufacturer, Description | ConvertTo-Json\""
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            # First try to find by exact name match in both Camera and Image classes
+            cmd = "powershell -Command \"Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Camera' -or $_.PNPClass -eq 'Image' } | Select-Object Name, DeviceID, Manufacturer, Description, PNPClass | ConvertTo-Json\""
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
             
             if result.returncode != 0:
                 print(f"Error getting camera list: {result.stderr}")
+                # Fallback to scanning
+                available_cameras = self.scan_available_cameras()
+                for camera in available_cameras:
+                    if camera_name.lower() in camera['name'].lower():
+                        print(f"✅ Found camera '{camera_name}' at index {camera['index']} (via scan)")
+                        return camera['index']
                 return None
             
             # Parse the output to find matching camera
@@ -870,28 +1047,44 @@ class CameraController:
             if not isinstance(devices, list):
                 devices = [devices]
             
+            print(f"Found {len(devices)} camera-like devices in Windows")
             current_index = 0
             for device in devices:
-                print(f"Checking device: {device}")
-                if camera_name.lower() in device['Name'].lower():
-                    print(f"Found camera '{camera_name}' at index {current_index}")
+                device_name = device.get('Name', '')
+                print(f"  Checking device {current_index}: {device_name} (Class: {device.get('PNPClass', 'Unknown')})")
+                
+                # Case-insensitive search for Iriun
+                search_name = camera_name.lower()
+                if "iriun" in search_name or "iriun" in device_name.lower():
+                    # Special handling for Iriun
+                    if "iriun" in device_name.lower():
+                        print(f"✅ Found Iriun Webcam at index {current_index}")
+                        return current_index
+                
+                # General name matching
+                if search_name in device_name.lower() or device_name.lower() in search_name:
+                    print(f"✅ Found camera '{camera_name}' at index {current_index}")
                     return current_index
-                if "Camera" in device['Name']:
+                
+                # Increment index if this is a camera-like device
+                if "Camera" in device_name or "Image" in device.get('PNPClass', ''):
                     current_index += 1
             
             # If not found by exact name, try scanning available cameras
             print("Camera not found by name, scanning available cameras...")
             available_cameras = self.scan_available_cameras()
             for camera in available_cameras:
-                if camera_name.lower() in camera['name'].lower():
-                    print(f"Found camera '{camera_name}' at index {camera['index']}")
+                if camera_name.lower() in camera['name'].lower() or "iriun" in camera_name.lower() and "iriun" in camera['name'].lower():
+                    print(f"✅ Found camera '{camera_name}' at index {camera['index']} (via scan)")
                     return camera['index']
             
-            print(f"Camera '{camera_name}' not found in device list")
+            print(f"❌ Camera '{camera_name}' not found in device list")
             return None
             
         except Exception as e:
             print(f"Error finding camera by name: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
 

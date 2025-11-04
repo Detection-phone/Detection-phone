@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, Response
 import time
 import cv2
+from flask_cors import CORS
 import numpy as np
 from flask_cors import CORS
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -341,11 +342,39 @@ def create_detection():
 @app.route('/api/settings', methods=['GET'])
 @login_required
 def get_settings():
-    # Get available cameras
-    available_cameras = CameraController.scan_available_cameras()
+    # Get available cameras (with error handling)
+    try:
+        available_cameras = CameraController.scan_available_cameras()
+        # Ensure it's always a list
+        if not isinstance(available_cameras, list):
+            logger.warning("scan_available_cameras() did not return a list, using empty list")
+            available_cameras = []
+    except Exception as e:
+        logger.error(f"BŁĄD KRYTYCZNY podczas skanowania kamer: {e}")
+        import traceback
+        traceback.print_exc()
+        available_cameras = []
+    
+    # --- KLUCZOWA POPRAWKA (FALLBACK) ---
+    # Jeśli lista jest pusta, dodaj domyślną kamerę, aby UI nie było puste
+    if not available_cameras:
+        logger.warning("OSTRZEŻENIE: Skanowanie kamer nie zwróciło wyników. Dodaję domyślny fallback (Kamera 0).")
+        print("⚠️ OSTRZEŻENIE: Skanowanie kamer nie zwróciło wyników. Dodaję domyślny fallback (Kamera 0).")
+        available_cameras = [
+            {
+                'index': 0,
+                'name': 'Domyślna Kamera (Indeks 0)',
+                'resolution': '640x480',
+                'fps': 30
+            }
+        ]
     
     # Get schedule from controller settings (or default)
     schedule = camera_controller.settings.get('schedule', DEFAULT_SCHEDULE.copy())
+    
+    # Get ROI zones from database
+    settings_db = Settings.get_or_create_default()
+    roi_zones = settings_db.roi_zones if settings_db.roi_zones else []
     
     return jsonify({
         'schedule': schedule,  # Weekly schedule JSON
@@ -355,7 +384,8 @@ def get_settings():
         'camera_name': camera_controller.settings['camera_name'],
         'anonymization_percent': camera_controller.settings.get('anonymization_percent', 50),
         'roi_coordinates': camera_controller.settings.get('roi_coordinates'),
-        'available_cameras': available_cameras,
+        'roi_zones': roi_zones,  # ROI zones from database
+        'available_cameras': available_cameras,  # Always a list (empty if error)
         'notifications': {
             'email': camera_controller.settings.get('email_notifications', False),
             'sms': camera_controller.settings.get('sms_notifications', False)
@@ -633,6 +663,197 @@ def generate_frames():
 def video_feed():
     """Stream live camera frames as MJPEG for the frontend settings page."""
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+def anonymize_frame(frame, anonymization_model, settings):
+    """
+    Anonimizuje górną część ciała osób na numpy array (frame).
+    Używa logiki podobnej do AnonymizerWorker._anonymize_faces.
+    
+    Args:
+        frame: numpy array (BGR image)
+        anonymization_model: YOLO model instance
+        settings: camera controller settings dict
+        
+    Returns:
+        anonymized_frame: numpy array z zanonimizowanymi osobami
+    """
+    try:
+        if anonymization_model is None:
+            logger.warning("Anonymization model not available, returning original frame")
+            return frame.copy()
+        
+        # Kopiuj klatkę aby nie modyfikować oryginału
+        anonymized_frame = frame.copy()
+        img_h, img_w = anonymized_frame.shape[:2]
+        
+        # Wykryj osoby za pomocą YOLO
+        results = anonymization_model(frame, verbose=False)
+        persons_found = 0
+        
+        # Parametry blur
+        blur_kernel_size = 99
+        blur_sigma = 30
+        
+        # Przetwórz wyniki
+        for result in results:
+            boxes = result.boxes
+            if boxes is None:
+                continue
+            for box in boxes:
+                class_id = int(box.cls[0])
+                confidence = float(box.conf[0])
+                
+                # Szukamy tylko klasy 'person' (0 w COCO)
+                if class_id == 0 and confidence >= 0.5:
+                    persons_found += 1
+                    
+                    # Pobierz pełny bounding box osoby
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    
+                    # Oblicz wysokość bbox osoby
+                    person_height = y2 - y1
+                    
+                    # Oblicz górną część ciała (konfigurowalny % od góry)
+                    try:
+                        percent = int(settings.get('anonymization_percent', 50))
+                    except Exception:
+                        percent = 50
+                    ratio = max(0, min(100, percent)) / 100.0
+                    upper_body_height = int(person_height * ratio)
+                    
+                    # Definiuj ROI dla górnej części ciała
+                    roi_x1 = x1
+                    roi_y1 = y1
+                    roi_x2 = x2
+                    roi_y2 = y1 + upper_body_height
+                    
+                    # Walidacja granic obrazu
+                    roi_x1 = max(0, roi_x1)
+                    roi_y1 = max(0, roi_y1)
+                    roi_x2 = min(img_w, roi_x2)
+                    roi_y2 = min(img_h, roi_y2)
+                    
+                    # Sprawdź czy ROI ma sens
+                    if roi_x2 <= roi_x1 or roi_y2 <= roi_y1:
+                        continue
+                    
+                    # Wytnij ROI górnej części ciała
+                    upper_body_roi = anonymized_frame[roi_y1:roi_y2, roi_x1:roi_x2]
+                    
+                    # Zastosuj silny Gaussian blur
+                    if upper_body_roi.size > 0:
+                        blurred_upper_body = cv2.GaussianBlur(
+                            upper_body_roi,
+                            (blur_kernel_size, blur_kernel_size),
+                            blur_sigma
+                        )
+                        anonymized_frame[roi_y1:roi_y2, roi_x1:roi_x2] = blurred_upper_body
+        
+        if persons_found > 0:
+            logger.info(f"Anonymized {persons_found} persons in config snapshot")
+        
+        return anonymized_frame
+        
+    except Exception as e:
+        logger.error(f"Error anonymizing frame: {e}")
+        return frame.copy()  # Return original on error
+
+@app.route('/api/settings/roi', methods=['GET'])
+@login_required
+def get_roi_zones():
+    """Get current ROI zones from database"""
+    try:
+        settings_db = Settings.get_or_create_default()
+        roi_zones = settings_db.roi_zones if settings_db.roi_zones else []
+        return jsonify({'roi_zones': roi_zones})
+    except Exception as e:
+        logger.error(f"Error getting ROI zones: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/settings/roi', methods=['POST'])
+@login_required
+def save_roi_zones():
+    """Save ROI zones to database"""
+    try:
+        data = request.get_json()
+        roi_zones = data.get('roi_zones', [])
+        
+        # Validate format
+        if not isinstance(roi_zones, list):
+            return jsonify({'error': 'roi_zones must be a list'}), 400
+        
+        # Validate each ROI zone
+        for zone in roi_zones:
+            if not isinstance(zone, dict):
+                return jsonify({'error': 'Each ROI zone must be an object'}), 400
+            if 'id' not in zone or 'name' not in zone or 'coords' not in zone:
+                return jsonify({'error': 'Each ROI zone must have id, name, and coords'}), 400
+            coords = zone.get('coords', {})
+            if not isinstance(coords, dict) or not all(k in coords for k in ['x', 'y', 'w', 'h']):
+                return jsonify({'error': 'coords must have x, y, w, h properties'}), 400
+            # Validate normalized coordinates (0-1)
+            for coord_key in ['x', 'y', 'w', 'h']:
+                val = coords[coord_key]
+                if not isinstance(val, (int, float)) or val < 0 or val > 1:
+                    return jsonify({'error': f'coords.{coord_key} must be between 0 and 1'}), 400
+        
+        # Save to database
+        settings_db = Settings.get_or_create_default()
+        settings_db.roi_zones = roi_zones
+        settings_db.updated_at = datetime.utcnow()
+        db.session.commit()
+        
+        # Update camera controller settings
+        camera_controller.settings['roi_zones'] = roi_zones
+        
+        logger.info(f"Saved {len(roi_zones)} ROI zones to database")
+        return jsonify({'message': 'ROI zones saved successfully', 'roi_zones': roi_zones})
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error saving ROI zones: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/camera/config_snapshot', methods=['GET'])
+@login_required
+def config_snapshot():
+    """
+    Endpoint do pobrania pojedynczego, zanonimizowanego zdjęcia konfiguracyjnego.
+    Użytkownik może użyć tego obrazu do rysowania ROI bez naruszania prywatności.
+    """
+    try:
+        # Pobierz ostatnią klatkę z kamery
+        frame = camera_controller.get_last_frame()
+        
+        if frame is None:
+            return jsonify({'error': 'Kamera jest offline'}), 409
+        
+        # Załaduj model YOLO do anonimizacji (jeśli jeszcze nie załadowany)
+        # Używamy tego samego modelu co AnonymizerWorker
+        anonymization_model = None
+        try:
+            anonymization_model = YOLO('yolov8n.pt')
+        except Exception as e:
+            logger.warning(f"Could not load anonymization model: {e}")
+        
+        # Zaanonimizuj klatkę
+        anonymized_frame = anonymize_frame(frame, anonymization_model, camera_controller.settings)
+        
+        # Zakoduj do JPEG
+        ret, buffer = cv2.imencode('.jpg', anonymized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ret:
+            return jsonify({'error': 'Błąd kodowania obrazu'}), 500
+        
+        # Zwróć jako surowe bajty
+        return Response(buffer.tobytes(), mimetype='image/jpeg')
+        
+    except Exception as e:
+        logger.error(f"Error in config_snapshot endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     with app.app_context():

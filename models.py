@@ -43,6 +43,8 @@ class Settings(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     # SQLite stores JSON as TEXT; SQLAlchemy's JSON type handles conversion
     schedule = db.Column(db.JSON, nullable=False, default=lambda: DEFAULT_SCHEDULE)
+    # ROI zones: list of objects with id, name, coords {x, y, w, h} (normalized 0-1)
+    roi_zones = db.Column(db.JSON, nullable=False, default=lambda: [])
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     

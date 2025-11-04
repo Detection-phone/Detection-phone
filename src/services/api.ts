@@ -154,6 +154,13 @@ export const cameraAPI = {
     const response = await api.get('/api/camera/status');
     return response.data;
   },
+  
+  getConfigSnapshot: async (): Promise<Blob> => {
+    const response = await api.get('/api/camera/config_snapshot', {
+      responseType: 'blob',
+    });
+    return response.data;
+  },
 };
 
 // ========================
@@ -194,7 +201,8 @@ export interface Settings {
   sms_notifications: boolean;
   email_notifications: boolean;
   anonymization_percent?: number;
-  roi_coordinates?: [number, number, number, number] | null;
+  roi_coordinates?: [number, number, number, number] | null; // Legacy single ROI
+  roi_zones?: ROIZone[]; // New multiple ROI zones
   telegram_notifications?: boolean;
   available_cameras?: CameraDevice[];
   notifications?: {
@@ -202,6 +210,21 @@ export interface Settings {
     sms: boolean;
     telegram?: boolean;
   };
+}
+
+export interface ROIZone {
+  id: string;
+  name: string;
+  coords: {
+    x: number; // normalized 0-1
+    y: number; // normalized 0-1
+    w: number; // normalized 0-1
+    h: number; // normalized 0-1
+  };
+}
+
+export interface ROIZonesResponse {
+  roi_zones: ROIZone[];
 }
 
 export const settingsAPI = {
@@ -212,6 +235,18 @@ export const settingsAPI = {
   
   update: async (settings: Partial<Settings>) => {
     const response = await api.post('/api/settings', settings);
+    return response.data;
+  },
+  
+  getROIZones: async (): Promise<ROIZone[]> => {
+    const response = await api.get<ROIZonesResponse>('/api/settings/roi');
+    return response.data.roi_zones;
+  },
+  
+  saveROIZones: async (roiZones: ROIZone[]) => {
+    const response = await api.post<ROIZonesResponse>('/api/settings/roi', {
+      roi_zones: roiZones,
+    });
     return response.data;
   },
 };

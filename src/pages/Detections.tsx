@@ -79,13 +79,17 @@ const Detections: React.FC = () => {
     try {
       setLoading(true);
       const response = await detectionAPI.getAll(page, 20);
-      setDetections(response.detections);
-      setTotalPages(response.total_pages);
-      console.log('✅ Detections loaded:', response.detections.length, 'items (page', page, 'of', response.total_pages, ')');
+      // ✅ FIXED: Ensure detections is always an array
+      setDetections(response.detections || []);
+      setTotalPages(response.total_pages || 0);
+      const detectionsCount = (response.detections || []).length;
+      console.log('✅ Detections loaded:', detectionsCount, 'items (page', page, 'of', response.total_pages || 0, ')');
       setError(null);
     } catch (err: any) {
       console.error('❌ Failed to fetch detections:', err);
       setError('Failed to load detections. Please try again.');
+      // ✅ FIXED: Set empty array on error to prevent undefined
+      setDetections([]);
     } finally {
       setLoading(false);
     }

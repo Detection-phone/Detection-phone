@@ -27,7 +27,7 @@ import {
   ButtonGroup,
 } from '@mui/material';
 import { LoadingButton } from '@mui/lab';
-import api, { settingsAPI, cameraAPI, CameraDevice, getBaseUrl } from '../services/api';
+import api, { settingsAPI, cameraAPI, CameraDevice, ROIZone } from '../services/api';
 import {
   ExpandMore,
   Schedule,
@@ -48,6 +48,9 @@ import {
   Stop,
   Camera,
   FilterCenterFocus,
+  Delete,
+  Edit,
+  Add,
 } from '@mui/icons-material';
 import { TimePicker } from '@mui/x-date-pickers/TimePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -132,7 +135,7 @@ const Settings: React.FC = () => {
   const [snackbar, setSnackbar] = useState<{
     open: boolean;
     message: string;
-    severity: 'success' | 'error' | 'info';
+    severity: 'success' | 'error' | 'info' | 'warning';
   }>({
     open: false,
     message: '',
@@ -143,16 +146,28 @@ const Settings: React.FC = () => {
   // ROI state
   const [isRoiExpanded, setIsRoiExpanded] = useState(false);
 
-  // ROI local drawing state
+  // Config photo state (for ROI configuration)
+  const [configPhotoUrl, setConfigPhotoUrl] = useState<string | null>(null);
+  const [isLoadingPhoto, setIsLoadingPhoto] = useState(false);
+
+  // New ROI zones state
+  const [drawingMode, setDrawingMode] = useState<'none' | 'single' | 'grid'>('none');
+  const [currentRect, setCurrentRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [savedROIs, setSavedROIs] = useState<ROIZone[]>([]);
+  const [gridGeneratorRect, setGridGeneratorRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [numRows, setNumRows] = useState<number>(4);
+  const [numCols, setNumCols] = useState<number>(5);
+  
+  // Drawing state
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [drawEnd, setDrawEnd] = useState<{ x: number; y: number } | null>(null);
+  const [pendingZoneName, setPendingZoneName] = useState<string>('');
+  const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
+  const [editingZoneName, setEditingZoneName] = useState<string>('');
+  
   const imgRef = React.useRef<HTMLImageElement | null>(null);
   const wrapperRef = React.useRef<HTMLDivElement | null>(null);
-  const videoFeedRef = useRef<HTMLDivElement | null>(null);
-
-  // Re-loadable video src with cache-busting
-  const [videoSrc, setVideoSrc] = useState<string | null>(null);
 
   // Fetch settings and camera status on mount
   useEffect(() => {
@@ -163,9 +178,11 @@ const Settings: React.FC = () => {
         
         console.log('📡 Fetched settings:', fetchedSettings);
         
-        // Set available cameras
-        if (fetchedSettings.available_cameras) {
+        // Set available cameras (ensure it's always an array)
+        if (fetchedSettings.available_cameras && Array.isArray(fetchedSettings.available_cameras)) {
           setAvailableCameras(fetchedSettings.available_cameras);
+        } else {
+          setAvailableCameras([]);
         }
         
         // Handle schedule - check for new weekly schedule or fallback to old format
@@ -206,6 +223,22 @@ const Settings: React.FC = () => {
           isRunning: status.is_running,
           withinSchedule: status.within_schedule,
         });
+
+        // Fetch ROI zones
+        // ✅ FIXED: Ensure savedROIs is always an array
+        if (fetchedSettings.roi_zones && Array.isArray(fetchedSettings.roi_zones)) {
+          setSavedROIs(fetchedSettings.roi_zones);
+        } else {
+          // Try to fetch from dedicated endpoint
+          try {
+            const roiZones = await settingsAPI.getROIZones();
+            setSavedROIs(Array.isArray(roiZones) ? roiZones : []);
+          } catch (error) {
+            console.error('Error fetching ROI zones:', error);
+            // ✅ FIXED: Set empty array on error to prevent undefined
+            setSavedROIs([]);
+          }
+        }
       } catch (error) {
         console.error('Error fetching data:', error);
         setSnackbar({
@@ -221,18 +254,35 @@ const Settings: React.FC = () => {
     fetchData();
   }, []);
 
-  // Reactive video stream management: responds to both ROI accordion state and camera status
-  useEffect(() => {
-    if (isRoiExpanded && cameraStatus.isRunning) {
-      // PRZYPADEK 1: Akordeon jest otwarty I kamera działa
-      // Uruchom lub odśwież stream
-      setVideoSrc(`${getBaseUrl()}/api/camera/video_feed?t=${Date.now()}`);
-    } else {
-      // PRZYPADEK 2: Akordeon jest zamknięty LUB kamera jest zatrzymana
-      // Zatrzymaj stream (wyczyść src)
-      setVideoSrc(null);
+  // Handle loading config photo
+  const handleLoadConfigPhoto = async () => {
+    setIsLoadingPhoto(true);
+    setConfigPhotoUrl(null);
+    
+    try {
+      const blob = await cameraAPI.getConfigSnapshot();
+      const url = URL.createObjectURL(blob);
+      setConfigPhotoUrl(url);
+      setIsLoadingPhoto(false);
+    } catch (error: any) {
+      console.error('Error loading config photo:', error);
+      setSnackbar({
+        open: true,
+        message: error.response?.data?.error || 'Nie udało się załadować zdjęcia konfiguracyjnego',
+        severity: 'error',
+      });
+      setIsLoadingPhoto(false);
     }
-  }, [isRoiExpanded, cameraStatus.isRunning]); // Reaguj na obie te zmiany
+  };
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (configPhotoUrl) {
+        URL.revokeObjectURL(configPhotoUrl);
+      }
+    };
+  }, [configPhotoUrl]);
 
   const handleAccordionChange = (panel: string) => (_event: React.SyntheticEvent, isExpanded: boolean) => {
     setExpanded(isExpanded ? panel : false);
@@ -287,48 +337,173 @@ const Settings: React.FC = () => {
   // ROI drawing helpers
   const getRelativeCoords = (e: React.MouseEvent) => {
     const rect = wrapperRef.current?.getBoundingClientRect();
-    if (!rect) return { x: 0, y: 0 };
+    if (!rect) return { x: 0, y: 0, width: 0, height: 0 };
     const x = Math.min(Math.max(e.clientX - rect.left, 0), rect.width);
     const y = Math.min(Math.max(e.clientY - rect.top, 0), rect.height);
-    return { x, y, width: rect.width, height: rect.height } as any;
+    return { x, y, width: rect.width, height: rect.height };
   };
 
-  const onMouseDown = (e: React.MouseEvent) => {
-    const { x, y } = getRelativeCoords(e) as any;
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (drawingMode === 'none') return;
+    const { x, y } = getRelativeCoords(e);
     setIsDrawing(true);
     setDrawStart({ x, y });
     setDrawEnd({ x, y });
   };
 
-  const onMouseMove = (e: React.MouseEvent) => {
-    if (!isDrawing || !drawStart) return;
-    const { x, y } = getRelativeCoords(e) as any;
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDrawing || !drawStart || drawingMode === 'none') return;
+    const { x, y } = getRelativeCoords(e);
     setDrawEnd({ x, y });
   };
 
-  const onMouseUp = (e: React.MouseEvent) => {
-    if (!isDrawing || !drawStart) return;
-    const { x, y, width, height } = getRelativeCoords(e) as any;
-    setIsDrawing(false);
-    setDrawEnd({ x, y });
-    // Normalize and save temp ROI
-    const x1 = Math.min(drawStart.x, x) / width;
-    const y1 = Math.min(drawStart.y, y) / height;
-    const x2 = Math.max(drawStart.x, x) / width;
-    const y2 = Math.max(drawStart.y, y) / height;
-    const clamped: [number, number, number, number] = [
-      Math.max(0, Math.min(1, x1)),
-      Math.max(0, Math.min(1, y1)),
-      Math.max(0, Math.min(1, x2)),
-      Math.max(0, Math.min(1, y2)),
-    ];
-    setSettings({ ...settings, roi: clamped });
-  };
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (!isDrawing || !drawStart || !drawEnd || drawingMode === 'none' || !wrapperRef.current) return;
+    
+    const { width, height } = wrapperRef.current.getBoundingClientRect();
+    if (width === 0 || height === 0) return;
 
-  const clearROI = () => {
-    setSettings({ ...settings, roi: null });
+    const x1 = Math.min(drawStart.x, drawEnd.x) / width;
+    const y1 = Math.min(drawStart.y, drawEnd.y) / height;
+    const x2 = Math.max(drawStart.x, drawEnd.x) / width;
+    const y2 = Math.max(drawStart.y, drawEnd.y) / height;
+
+    // Normalize coordinates (0-1)
+    const normalizedRect = {
+      x: Math.max(0, Math.min(1, x1)),
+      y: Math.max(0, Math.min(1, y1)),
+      w: Math.max(0, Math.min(1, x2 - x1)),
+      h: Math.max(0, Math.min(1, y2 - y1)),
+    };
+
+    if (normalizedRect.w < 0.01 || normalizedRect.h < 0.01) {
+      // Too small, ignore
+      setIsDrawing(false);
     setDrawStart(null);
     setDrawEnd(null);
+      return;
+    }
+
+    setIsDrawing(false);
+
+    if (drawingMode === 'single') {
+      setCurrentRect(normalizedRect);
+      setPendingZoneName('');
+    } else if (drawingMode === 'grid') {
+      setGridGeneratorRect(normalizedRect);
+    }
+  };
+
+  const handleSaveSingleROI = () => {
+    if (!currentRect || !pendingZoneName.trim()) {
+      setSnackbar({
+        open: true,
+        message: 'Proszę podać nazwę strefy',
+        severity: 'info',
+      });
+      return;
+    }
+
+    const newZone: ROIZone = {
+      id: `zone_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: pendingZoneName.trim(),
+      coords: currentRect,
+    };
+
+    setSavedROIs([...savedROIs, newZone]);
+    setCurrentRect(null);
+    setPendingZoneName('');
+    setDrawingMode('none');
+  };
+
+  const handleGenerateGrid = () => {
+    if (!gridGeneratorRect || numRows < 1 || numCols < 1) {
+      setSnackbar({
+        open: true,
+        message: 'Proszę narysować prostokąt i podać liczbę rzędów i kolumn',
+        severity: 'info',
+      });
+      return;
+    }
+
+    const newZones: ROIZone[] = [];
+    const cellWidth = gridGeneratorRect.w / numCols;
+    const cellHeight = gridGeneratorRect.h / numRows;
+
+    for (let r = 0; r < numRows; r++) {
+      for (let c = 0; c < numCols; c++) {
+        const cellX = gridGeneratorRect.x + (c * cellWidth);
+        const cellY = gridGeneratorRect.y + (r * cellHeight);
+        
+        newZones.push({
+          id: `grid-${r}-${c}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          name: `R${r + 1}-M${c + 1}`,
+          coords: {
+            x: cellX,
+            y: cellY,
+            w: cellWidth,
+            h: cellHeight,
+          },
+        });
+      }
+    }
+
+    setSavedROIs([...savedROIs, ...newZones]);
+    setGridGeneratorRect(null);
+    setNumRows(4);
+    setNumCols(5);
+    setDrawingMode('none');
+    
+    setSnackbar({
+      open: true,
+      message: `Utworzono siatkę ${numRows}x${numCols} (${numRows * numCols} stref)`,
+      severity: 'success',
+    });
+  };
+
+  const handleDeleteROI = (id: string) => {
+    setSavedROIs(savedROIs.filter(zone => zone.id !== id));
+  };
+
+  const handleEditROI = (id: string) => {
+    const zone = savedROIs.find(z => z.id === id);
+    if (zone) {
+      setEditingZoneId(id);
+      setEditingZoneName(zone.name);
+    }
+  };
+
+  const handleSaveEditROI = () => {
+    if (!editingZoneId || !editingZoneName.trim()) return;
+    
+    setSavedROIs(savedROIs.map(zone =>
+      zone.id === editingZoneId
+        ? { ...zone, name: editingZoneName.trim() }
+        : zone
+    ));
+    setEditingZoneId(null);
+    setEditingZoneName('');
+  };
+
+  const handleSaveROIsToBackend = async () => {
+    setLoading(true);
+    try {
+      await settingsAPI.saveROIZones(savedROIs);
+      setSnackbar({
+        open: true,
+        message: 'Strefy ROI zapisane pomyślnie! 🎉',
+        severity: 'success',
+      });
+    } catch (error: any) {
+      console.error('Error saving ROI zones:', error);
+      setSnackbar({
+        open: true,
+        message: error.response?.data?.error || 'Błąd podczas zapisywania stref ROI',
+        severity: 'error',
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCameraChange = (cameraIndex: number) => {
@@ -794,7 +969,7 @@ const Settings: React.FC = () => {
       </Accordion>
 
       {/* ================================================================== */}
-      {/* NOWA SEKCJA ROI (wg wskazówek) */}
+      {/* NOWA SEKCJA ROI - System Stref */}
       {/* ================================================================== */}
       <Accordion
         expanded={isRoiExpanded}
@@ -805,73 +980,253 @@ const Settings: React.FC = () => {
       >
         <AccordionSummary expandIcon={<ExpandMore />}>
           <FilterCenterFocus sx={{ mr: 1, color: 'text.secondary' }} />
-          <Typography>Region Zainteresowania (ROI)</Typography>
+          <Typography>Definiowanie Stref ROI</Typography>
+          {savedROIs.length > 0 && (
+            <Chip
+              label={`${savedROIs.length} stref`}
+              size="small"
+              sx={{ ml: 2 }}
+              color="primary"
+            />
+          )}
         </AccordionSummary>
         <AccordionDetails>
-          <Stack spacing={2}>
+          <Stack spacing={3}>
             <Typography variant="body2" color="text.secondary">
-              Kliknij i przeciągnij na podglądzie na żywo, aby narysować obszar. Detekcje będą rejestrowane tylko w tym obszarze.
+              Załaduj obraz konfiguracyjny sali, a następnie użyj narzędzi do definiowania stref. Możesz rysować pojedyncze strefy lub generować siatkę (grid) automatycznie.
             </Typography>
 
-            {/* --- Kontener do rysowania --- */}
-            <Box
-              ref={videoFeedRef}
+            {/* Przycisk do ładowania zdjęcia */}
+            {!configPhotoUrl && !isLoadingPhoto && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                <Button
+                  variant="contained"
+                  size="large"
+                  startIcon={<Camera />}
+                  onClick={handleLoadConfigPhoto}
+                  disabled={!cameraStatus.isRunning}
+                >
+                  Załaduj Obraz Konfiguracyjny
+                </Button>
+              </Box>
+            )}
+
+            {/* Loading indicator */}
+            {isLoadingPhoto && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                <CircularProgress />
+              </Box>
+            )}
+
+            {/* Panel narzędzi i obraz konfiguracyjny */}
+            {configPhotoUrl && (
+              <Grid container spacing={2}>
+                {/* Panel narzędzi */}
+                <Grid item xs={12} md={3}>
+                  <Paper sx={{ p: 2 }}>
+                    <Typography variant="h6" sx={{ mb: 2, fontSize: '1rem' }}>
+                      Narzędzia
+                    </Typography>
+                    <Stack spacing={2}>
+                      <Button
+                        variant={drawingMode === 'single' ? 'contained' : 'outlined'}
+                        fullWidth
+                        startIcon={<Add />}
+                        onClick={() => {
+                          setDrawingMode('single');
+                          setCurrentRect(null);
+                          setGridGeneratorRect(null);
+                        }}
+                      >
+                        Rysuj Pojedynczą Strefę
+                      </Button>
+                      <Button
+                        variant={drawingMode === 'grid' ? 'contained' : 'outlined'}
+                        fullWidth
+                        startIcon={<Add />}
+                        onClick={() => {
+                          setDrawingMode('grid');
+                          setCurrentRect(null);
+                          setGridGeneratorRect(null);
+                        }}
+                      >
+                        Generuj Siatkę (Grid)
+                      </Button>
+                      <Button
+                        variant="outlined"
+                        fullWidth
+                        onClick={() => {
+                          setDrawingMode('none');
+                          setCurrentRect(null);
+                          setGridGeneratorRect(null);
+                        }}
+                      >
+                        Anuluj
+                      </Button>
+                    </Stack>
+
+                    {/* Formularz dla pojedynczej strefy */}
+                    {currentRect && drawingMode === 'single' && (
+                      <Box sx={{ mt: 3, p: 2, bgcolor: 'background.default', borderRadius: 1 }}>
+                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                          Zapisz Pojedynczą Strefę
+                        </Typography>
+                        <TextField
+                          fullWidth
+                          size="small"
+                          label="Nazwa strefy"
+                          value={pendingZoneName}
+                          onChange={(e) => setPendingZoneName(e.target.value)}
+                          placeholder="np. Biurko 1"
+                          sx={{ mb: 2 }}
+                        />
+                        <Button
+                          variant="contained"
+                          fullWidth
+                          onClick={handleSaveSingleROI}
+                          disabled={!pendingZoneName.trim()}
+                        >
+                          Zapisz Strefę
+                        </Button>
+                      </Box>
+                    )}
+
+                    {/* Formularz dla generatora siatki */}
+                    {gridGeneratorRect && drawingMode === 'grid' && (
+                      <Box sx={{ mt: 3, p: 2, bgcolor: 'background.default', borderRadius: 1 }}>
+                        <Typography variant="subtitle2" sx={{ mb: 2 }}>
+                          Konfiguracja Siatki
+                        </Typography>
+                        <TextField
+                          fullWidth
+                          size="small"
+                          type="number"
+                          label="Liczba Rzędów"
+                          value={numRows}
+                          onChange={(e) => setNumRows(Math.max(1, parseInt(e.target.value) || 1))}
+                          inputProps={{ min: 1, max: 50 }}
+                          sx={{ mb: 2 }}
+                        />
+                        <TextField
+                          fullWidth
+                          size="small"
+                          type="number"
+                          label="Liczba Kolumn"
+                          value={numCols}
+                          onChange={(e) => setNumCols(Math.max(1, parseInt(e.target.value) || 1))}
+                          inputProps={{ min: 1, max: 50 }}
+                          sx={{ mb: 2 }}
+                        />
+                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                          Utworzy {numRows * numCols} stref (R1-M1, R1-M2, ..., R{numRows}-M{numCols})
+                        </Typography>
+                        <Button
+                          variant="contained"
+                          fullWidth
+                          onClick={handleGenerateGrid}
+                          disabled={numRows < 1 || numCols < 1}
+                          sx={{ mb: 1 }}
+                        >
+                          Zatwierdź Siatkę
+                        </Button>
+                      </Box>
+                    )}
+
+                    {/* Lista zapisanych stref */}
+                    {savedROIs.length > 0 && (
+                      <Box sx={{ mt: 3 }}>
+                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                          Zapisane Strefy ({savedROIs.length})
+                        </Typography>
+                        <Stack spacing={1}>
+                          {savedROIs.map((zone) => (
+                            <Paper
+                              key={zone.id}
+                              sx={{
+                                p: 1.5,
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                bgcolor: editingZoneId === zone.id ? 'action.selected' : 'background.paper',
+                              }}
+                            >
+                              {editingZoneId === zone.id ? (
+                                <TextField
+                                  size="small"
+                                  value={editingZoneName}
+                                  onChange={(e) => setEditingZoneName(e.target.value)}
+                                  onKeyPress={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleSaveEditROI();
+                                    }
+                                  }}
+                                  autoFocus
+                                  sx={{ flex: 1, mr: 1 }}
+                                />
+                              ) : (
+                                <Typography variant="body2" sx={{ flex: 1 }}>
+                                  {zone.name}
+                                </Typography>
+                              )}
+                              <Box>
+                                {editingZoneId === zone.id ? (
+                                  <IconButton
+                                    size="small"
+                                    onClick={handleSaveEditROI}
+                                    color="primary"
+                                  >
+                                    <Save />
+                                  </IconButton>
+                                ) : (
+                                  <>
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => handleEditROI(zone.id)}
+                                      color="primary"
+                                    >
+                                      <Edit fontSize="small" />
+                                    </IconButton>
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => handleDeleteROI(zone.id)}
+                                      color="error"
+                                    >
+                                      <Delete fontSize="small" />
+                                    </IconButton>
+                                  </>
+                                )}
+                              </Box>
+                            </Paper>
+                          ))}
+                        </Stack>
+                      </Box>
+                    )}
+                  </Paper>
+                </Grid>
+
+                {/* Obraz konfiguracyjny z rysowaniem */}
+                <Grid item xs={12} md={9}>
+                  <Box
+                    ref={wrapperRef}
               sx={{
                 position: 'relative',
-                cursor: 'crosshair',
+                      cursor: drawingMode !== 'none' ? 'crosshair' : 'default',
                 width: '100%',
                 border: (theme) => `1px solid ${theme.palette.divider}`,
                 overflow: 'hidden',
               }}
-              onMouseDown={(e: React.MouseEvent<HTMLDivElement>) => {
-                if (!videoFeedRef.current) return;
-                const rect = videoFeedRef.current.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-                setIsDrawing(true);
-                setDrawStart({ x, y });
-                setDrawEnd({ x, y });
-              }}
-              onMouseMove={(e: React.MouseEvent<HTMLDivElement>) => {
-                if (!isDrawing || !videoFeedRef.current || !drawStart) return;
-                const rect = videoFeedRef.current.getBoundingClientRect();
-                const x = Math.min(Math.max(0, e.clientX - rect.left), rect.width);
-                const y = Math.min(Math.max(0, e.clientY - rect.top), rect.height);
-                setDrawEnd({ x, y });
-              }}
-              onMouseUp={(e: React.MouseEvent<HTMLDivElement>) => {
-                if (!isDrawing || !videoFeedRef.current || !drawStart) return;
-                setIsDrawing(false);
-                const { width, height } = videoFeedRef.current.getBoundingClientRect();
-                if (width === 0 || height === 0 || !drawEnd) return;
-                const x1 = Math.min(drawStart.x, drawEnd.x) / width;
-                const y1 = Math.min(drawStart.y, drawEnd.y) / height;
-                const x2 = Math.max(drawStart.x, drawEnd.x) / width;
-                const y2 = Math.max(drawStart.y, drawEnd.y) / height;
-                if (x1 === x2 || y1 === y2) {
-                  setSettings({ ...settings, roi: null });
-                } else {
-                  setSettings({
-                    ...settings,
-                    roi: [
-                      parseFloat(x1.toFixed(4)),
-                      parseFloat(y1.toFixed(4)),
-                      parseFloat(x2.toFixed(4)),
-                      parseFloat(y2.toFixed(4)),
-                    ],
-                  });
-                }
-              }}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
               onMouseLeave={() => {
                 if (isDrawing) setIsDrawing(false);
               }}
             >
-              {/* Podgląd na żywo */}
-              <Box sx={{ position: 'relative', minHeight: '200px', background: '#000' }}>
-                {videoSrc ? (
+                    {/* Statyczny obraz konfiguracyjny */}
                   <img
-                    src={videoSrc}
-                    alt="Live preview"
+                      ref={imgRef}
+                      src={configPhotoUrl}
+                      alt="Podgląd Sali"
                     style={{
                       width: '100%',
                       height: 'auto',
@@ -879,27 +1234,14 @@ const Settings: React.FC = () => {
                       pointerEvents: 'none',
                     }}
                   />
-                ) : (
-                  <img
-                    src={'/static/images/looking.png'}
-                    alt="Live preview offline"
-                    style={{
-                      width: '100%',
-                      height: 'auto',
-                      display: 'block',
-                      objectFit: 'contain',
-                      maxHeight: '480px',
-                    }}
-                  />
-                )}
-              </Box>
 
               {/* Narysowany prostokąt (w trakcie) */}
-              {isDrawing && drawStart && drawEnd && (
+                    {isDrawing && drawStart && drawEnd && wrapperRef.current && (
                 <div
                   style={{
                     position: 'absolute',
                     border: '2px dashed #00bfff',
+                          backgroundColor: 'rgba(0, 191, 255, 0.1)',
                     left: Math.min(drawStart.x, drawEnd.x),
                     top: Math.min(drawStart.y, drawEnd.y),
                     width: Math.abs(drawStart.x - drawEnd.x),
@@ -909,35 +1251,144 @@ const Settings: React.FC = () => {
                 />
               )}
 
-              {/* Zapisany prostokąt */}
-              {!isDrawing && settings.roi && videoFeedRef.current && (
-                <div
+                    {/* Zapisane strefy ROI */}
+                    {wrapperRef.current && savedROIs.map((zone) => {
+                      const rect = wrapperRef.current?.getBoundingClientRect();
+                      if (!rect) return null;
+                      return (
+                        <div
+                          key={zone.id}
                   style={{
                     position: 'absolute',
-                    border: '2px solid #00bfff',
-                    backgroundColor: 'rgba(0, 191, 255, 0.2)',
-                    left: settings.roi[0] * videoFeedRef.current.clientWidth,
-                    top: settings.roi[1] * videoFeedRef.current.clientHeight,
-                    width: (settings.roi[2] - settings.roi[0]) * videoFeedRef.current.clientWidth,
-                    height: (settings.roi[3] - settings.roi[1]) * videoFeedRef.current.clientHeight,
+                            border: '2px solid #4caf50',
+                            backgroundColor: 'rgba(76, 175, 80, 0.2)',
+                            left: zone.coords.x * rect.width,
+                            top: zone.coords.y * rect.height,
+                            width: zone.coords.w * rect.width,
+                            height: zone.coords.h * rect.height,
+                            pointerEvents: 'none',
+                          }}
+                        >
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              position: 'absolute',
+                              top: -20,
+                              left: 0,
+                              bgcolor: 'rgba(76, 175, 80, 0.9)',
+                              color: 'white',
+                              px: 0.5,
+                              borderRadius: 0.5,
+                              fontSize: '0.7rem',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {zone.name}
+                          </Typography>
+                        </div>
+                      );
+                    })}
+
+                    {/* Podgląd prostokąta dla pojedynczej strefy */}
+                    {currentRect && !isDrawing && wrapperRef.current && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          border: '2px solid #ff9800',
+                          backgroundColor: 'rgba(255, 152, 0, 0.2)',
+                          left: currentRect.x * wrapperRef.current.clientWidth,
+                          top: currentRect.y * wrapperRef.current.clientHeight,
+                          width: currentRect.w * wrapperRef.current.clientWidth,
+                          height: currentRect.h * wrapperRef.current.clientHeight,
                     pointerEvents: 'none',
                   }}
                 />
               )}
+
+                    {/* Podgląd prostokąta dla generatora siatki */}
+                    {gridGeneratorRect && !isDrawing && wrapperRef.current && (
+                      <>
+                        <div
+                          style={{
+                            position: 'absolute',
+                            border: '2px solid #9c27b0',
+                            backgroundColor: 'rgba(156, 39, 176, 0.2)',
+                            left: gridGeneratorRect.x * wrapperRef.current.clientWidth,
+                            top: gridGeneratorRect.y * wrapperRef.current.clientHeight,
+                            width: gridGeneratorRect.w * wrapperRef.current.clientWidth,
+                            height: gridGeneratorRect.h * wrapperRef.current.clientHeight,
+                            pointerEvents: 'none',
+                          }}
+                        />
+                        {/* Podgląd siatki - linie pionowe */}
+                        {Array.from({ length: numCols - 1 }).map((_, i) => {
+                          const cellWidth = gridGeneratorRect.w / numCols;
+                          return (
+                            <div
+                              key={`v-${i}`}
+                              style={{
+                                position: 'absolute',
+                                borderLeft: '1px dashed #9c27b0',
+                                left: (gridGeneratorRect.x + (i + 1) * cellWidth) * wrapperRef.current!.clientWidth,
+                                top: gridGeneratorRect.y * wrapperRef.current!.clientHeight,
+                                width: 1,
+                                height: gridGeneratorRect.h * wrapperRef.current!.clientHeight,
+                                pointerEvents: 'none',
+                              }}
+                            />
+                          );
+                        })}
+                        {/* Podgląd siatki - linie poziome */}
+                        {Array.from({ length: numRows - 1 }).map((_, i) => {
+                          const cellHeight = gridGeneratorRect.h / numRows;
+                          return (
+                            <div
+                              key={`h-${i}`}
+                              style={{
+                                position: 'absolute',
+                                borderTop: '1px dashed #9c27b0',
+                                left: gridGeneratorRect.x * wrapperRef.current!.clientWidth,
+                                top: (gridGeneratorRect.y + (i + 1) * cellHeight) * wrapperRef.current!.clientHeight,
+                                width: gridGeneratorRect.w * wrapperRef.current!.clientWidth,
+                                height: 1,
+                                pointerEvents: 'none',
+                              }}
+                            />
+                          );
+                        })}
+                      </>
+                    )}
             </Box>
 
-            {/* Przyciski */}
-            <Stack direction="row" spacing={1} justifyContent="space-between" alignItems="center">
-              <Button variant="outlined" color="warning" onClick={() => setSettings({ ...settings, roi: null })}>
-                Wyczyść ROI
+                  {/* Przycisk do ponownego załadowania */}
+                  <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+                    <Button
+                      variant="outlined"
+                      startIcon={<Refresh />}
+                      onClick={handleLoadConfigPhoto}
+                      disabled={isLoadingPhoto || !cameraStatus.isRunning}
+                    >
+                      Załaduj ponownie
               </Button>
-              <Typography variant="body2" fontFamily="monospace" color="text.secondary">
-                {settings?.roi ? `ROI: [${settings.roi.join(', ')}]` : 'ROI: [Brak]'}
-              </Typography>
-              <LoadingButton variant="contained" startIcon={<Save />} loading={loading} onClick={handleSave}>
-                Zapisz ROI
+                  </Box>
+                </Grid>
+              </Grid>
+            )}
+
+            {/* Przycisk zapisu do backendu */}
+            {savedROIs.length > 0 && (
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', pt: 2 }}>
+                <LoadingButton
+                  variant="contained"
+                  size="large"
+                  startIcon={<Save />}
+                  loading={loading}
+                  onClick={handleSaveROIsToBackend}
+                >
+                  Zapisz Ustawienia ROI
               </LoadingButton>
-            </Stack>
+              </Box>
+            )}
           </Stack>
         </AccordionDetails>
       </Accordion>
@@ -1051,7 +1502,7 @@ const Settings: React.FC = () => {
               ) : (
                 <MenuItem disabled>
                   <Typography variant="body2" color="text.secondary">
-                    Loading cameras...
+                    {availableCameras.length === 0 ? 'Brak dostępnych kamer' : 'Loading cameras...'}
                   </Typography>
                 </MenuItem>
               )}
