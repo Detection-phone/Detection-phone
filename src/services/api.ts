@@ -156,7 +156,8 @@ export const cameraAPI = {
   },
   
   getConfigSnapshot: async (): Promise<Blob> => {
-    const response = await api.get('/api/camera/config_snapshot', {
+    // Dodajemy parametr 't' z aktualnym czasem, aby przełamać cache
+    const response = await api.get(`/api/camera/config_snapshot?t=${Date.now()}`, {
       responseType: 'blob',
     });
     return response.data;

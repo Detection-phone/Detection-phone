@@ -57,6 +57,16 @@ login_manager.login_message_category = "danger"
 camera_controller = CameraController()
 logger.info("Camera controller initialized")
 
+# Load ROI zones from database on startup
+with app.app_context():
+    try:
+        settings = Settings.get_or_create_default()
+        if settings.roi_zones:
+            camera_controller.update_roi_zones(settings.roi_zones)
+            logger.info(f"Loaded {len(settings.roi_zones)} ROI zones on startup")
+    except Exception as e:
+        logger.error(f"Error loading ROI zones on startup: {e}")
+
 # Initialize YOLO model
 try:
     model = YOLO('yolov8n.pt')
@@ -805,6 +815,8 @@ def save_roi_zones():
         
         # Update camera controller settings
         camera_controller.settings['roi_zones'] = roi_zones
+        # Update ROI zones in controller (for per-zone throttling)
+        camera_controller.update_roi_zones(roi_zones)
         
         logger.info(f"Saved {len(roi_zones)} ROI zones to database")
         return jsonify({'message': 'ROI zones saved successfully', 'roi_zones': roi_zones})

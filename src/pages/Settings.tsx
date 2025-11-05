@@ -25,6 +25,13 @@ import {
   CircularProgress,
   Checkbox,
   ButtonGroup,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Radio,
+  RadioGroup,
 } from '@mui/material';
 import { LoadingButton } from '@mui/lab';
 import api, { settingsAPI, cameraAPI, CameraDevice, ROIZone } from '../services/api';
@@ -136,6 +143,7 @@ const Settings: React.FC = () => {
     open: boolean;
     message: string;
     severity: 'success' | 'error' | 'info' | 'warning';
+    autoHideDuration?: number;
   }>({
     open: false,
     message: '',
@@ -151,12 +159,15 @@ const Settings: React.FC = () => {
   const [isLoadingPhoto, setIsLoadingPhoto] = useState(false);
 
   // New ROI zones state
-  const [drawingMode, setDrawingMode] = useState<'none' | 'single' | 'grid'>('none');
+  const [drawingMode, setDrawingMode] = useState<'none' | 'single' | 'grid' | 'edit'>('none');
   const [currentRect, setCurrentRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [savedROIs, setSavedROIs] = useState<ROIZone[]>([]);
   const [gridGeneratorRect, setGridGeneratorRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [numRows, setNumRows] = useState<number>(4);
   const [numCols, setNumCols] = useState<number>(5);
+  const [gridPrefix, setGridPrefix] = useState<string>('');
+  const [gridNamingOrder, setGridNamingOrder] = useState<'rows-cols' | 'cols-rows'>('rows-cols');
+  const [gridNamingMode, setGridNamingMode] = useState<'sequential' | 'grid'>('sequential');
   
   // Drawing state
   const [isDrawing, setIsDrawing] = useState(false);
@@ -165,6 +176,20 @@ const Settings: React.FC = () => {
   const [pendingZoneName, setPendingZoneName] = useState<string>('');
   const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
   const [editingZoneName, setEditingZoneName] = useState<string>('');
+  
+  // ROI editing state
+  const [selectedROIId, setSelectedROIId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizeHandle, setResizeHandle] = useState<'nw' | 'ne' | 'sw' | 'se' | null>(null);
+  const [resizeStart, setResizeStart] = useState<{ x: number; y: number; coords: { x: number; y: number; w: number; h: number } } | null>(null);
+  
+  // Dialog state
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  
+  // Autosave state
+  const autosaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   const imgRef = React.useRef<HTMLImageElement | null>(null);
   const wrapperRef = React.useRef<HTMLDivElement | null>(null);
@@ -343,22 +368,174 @@ const Settings: React.FC = () => {
     return { x, y, width: rect.width, height: rect.height };
   };
 
+  // Check if point is inside ROI
+  const isPointInROI = (x: number, y: number, roi: ROIZone, width: number, height: number): boolean => {
+    const roiX = roi.coords.x * width;
+    const roiY = roi.coords.y * height;
+    const roiW = roi.coords.w * width;
+    const roiH = roi.coords.h * height;
+    return x >= roiX && x <= roiX + roiW && y >= roiY && y <= roiY + roiH;
+  };
+
+  // Check if point is in resize handle
+  const getResizeHandle = (x: number, y: number, roi: ROIZone, width: number, height: number): 'nw' | 'ne' | 'sw' | 'se' | null => {
+    const handleSize = 8;
+    const roiX = roi.coords.x * width;
+    const roiY = roi.coords.y * height;
+    const roiW = roi.coords.w * width;
+    const roiH = roi.coords.h * height;
+
+    // Check corners
+    if (Math.abs(x - roiX) < handleSize && Math.abs(y - roiY) < handleSize) return 'nw';
+    if (Math.abs(x - (roiX + roiW)) < handleSize && Math.abs(y - roiY) < handleSize) return 'ne';
+    if (Math.abs(x - roiX) < handleSize && Math.abs(y - (roiY + roiH)) < handleSize) return 'sw';
+    if (Math.abs(x - (roiX + roiW)) < handleSize && Math.abs(y - (roiY + roiH)) < handleSize) return 'se';
+    
+    return null;
+  };
+
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (drawingMode === 'none') return;
-    const { x, y } = getRelativeCoords(e);
-    setIsDrawing(true);
-    setDrawStart({ x, y });
-    setDrawEnd({ x, y });
+    if (!wrapperRef.current) return;
+    
+    const { x, y, width, height } = getRelativeCoords(e);
+    
+    // Check if clicking on a resize handle
+    if (selectedROIId) {
+      const selectedROI = savedROIs.find(r => r.id === selectedROIId);
+      if (selectedROI) {
+        const handle = getResizeHandle(x, y, selectedROI, width, height);
+        if (handle) {
+          e.preventDefault();
+          setIsResizing(true);
+          setResizeHandle(handle);
+          setResizeStart({ x, y, coords: { ...selectedROI.coords } });
+          return;
+        }
+      }
+    }
+    
+    // Check if clicking on an existing ROI
+    let clickedROI: ROIZone | null = null;
+    for (const roi of savedROIs) {
+      if (isPointInROI(x, y, roi, width, height)) {
+        clickedROI = roi;
+        break;
+      }
+    }
+    
+    if (drawingMode === 'none' || drawingMode === 'edit') {
+      if (clickedROI) {
+        e.preventDefault();
+        setSelectedROIId(clickedROI.id);
+        setIsDragging(true);
+        setDragStart({ x, y });
+        return;
+      } else {
+        setSelectedROIId(null);
+      }
+    }
+    
+    // Start drawing new ROI (only if not in edit mode and not clicking on existing ROI)
+    if ((drawingMode === 'single' || drawingMode === 'grid') && !clickedROI) {
+      setIsDrawing(true);
+      setDrawStart({ x, y });
+      setDrawEnd({ x, y });
+    }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDrawing || !drawStart || drawingMode === 'none') return;
-    const { x, y } = getRelativeCoords(e);
-    setDrawEnd({ x, y });
+    if (!wrapperRef.current) return;
+    
+    const { x, y, width, height } = getRelativeCoords(e);
+    
+    // Handle resizing
+    if (isResizing && resizeHandle && resizeStart && selectedROIId) {
+      const deltaX = (x - resizeStart.x) / width;
+      const deltaY = (y - resizeStart.y) / height;
+      const startCoords = resizeStart.coords;
+      
+      let newCoords = { ...startCoords };
+      
+      switch (resizeHandle) {
+        case 'nw':
+          newCoords.x = Math.max(0, Math.min(1, startCoords.x + deltaX));
+          newCoords.y = Math.max(0, Math.min(1, startCoords.y + deltaY));
+          newCoords.w = Math.max(0.01, startCoords.w - deltaX);
+          newCoords.h = Math.max(0.01, startCoords.h - deltaY);
+          break;
+        case 'ne':
+          newCoords.y = Math.max(0, Math.min(1, startCoords.y + deltaY));
+          newCoords.w = Math.max(0.01, startCoords.w + deltaX);
+          newCoords.h = Math.max(0.01, startCoords.h - deltaY);
+          break;
+        case 'sw':
+          newCoords.x = Math.max(0, Math.min(1, startCoords.x + deltaX));
+          newCoords.w = Math.max(0.01, startCoords.w - deltaX);
+          newCoords.h = Math.max(0.01, startCoords.h + deltaY);
+          break;
+        case 'se':
+          newCoords.w = Math.max(0.01, startCoords.w + deltaX);
+          newCoords.h = Math.max(0.01, startCoords.h + deltaY);
+          break;
+      }
+      
+      // Ensure coordinates stay within bounds
+      newCoords.x = Math.max(0, Math.min(1, newCoords.x));
+      newCoords.y = Math.max(0, Math.min(1, newCoords.y));
+      newCoords.w = Math.max(0.01, Math.min(1 - newCoords.x, newCoords.w));
+      newCoords.h = Math.max(0.01, Math.min(1 - newCoords.y, newCoords.h));
+      
+      setSavedROIs(savedROIs.map(roi => 
+        roi.id === selectedROIId ? { ...roi, coords: newCoords } : roi
+      ));
+      return;
+    }
+    
+    // Handle dragging
+    if (isDragging && dragStart && selectedROIId) {
+      const deltaX = (x - dragStart.x) / width;
+      const deltaY = (y - dragStart.y) / height;
+      
+      const selectedROI = savedROIs.find(r => r.id === selectedROIId);
+      if (selectedROI) {
+        let newX = selectedROI.coords.x + deltaX;
+        let newY = selectedROI.coords.y + deltaY;
+        
+        // Keep within bounds
+        newX = Math.max(0, Math.min(1 - selectedROI.coords.w, newX));
+        newY = Math.max(0, Math.min(1 - selectedROI.coords.h, newY));
+        
+        setSavedROIs(savedROIs.map(roi => 
+          roi.id === selectedROIId 
+            ? { ...roi, coords: { ...roi.coords, x: newX, y: newY } }
+            : roi
+        ));
+        setDragStart({ x, y });
+      }
+      return;
+    }
+    
+    // Handle drawing new ROI
+    if (isDrawing && drawStart && (drawingMode === 'single' || drawingMode === 'grid')) {
+      setDrawEnd({ x, y });
+    }
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
-    if (!isDrawing || !drawStart || !drawEnd || drawingMode === 'none' || !wrapperRef.current) return;
+    if (isResizing) {
+      setIsResizing(false);
+      setResizeHandle(null);
+      setResizeStart(null);
+      return;
+    }
+    
+    if (isDragging) {
+      setIsDragging(false);
+      setDragStart(null);
+      return;
+    }
+    
+    if (!isDrawing || !drawStart || !drawEnd || (drawingMode !== 'single' && drawingMode !== 'grid') || !wrapperRef.current) return;
     
     const { width, height } = wrapperRef.current.getBoundingClientRect();
     if (width === 0 || height === 0) return;
@@ -379,8 +556,8 @@ const Settings: React.FC = () => {
     if (normalizedRect.w < 0.01 || normalizedRect.h < 0.01) {
       // Too small, ignore
       setIsDrawing(false);
-    setDrawStart(null);
-    setDrawEnd(null);
+      setDrawStart(null);
+      setDrawEnd(null);
       return;
     }
 
@@ -429,15 +606,42 @@ const Settings: React.FC = () => {
     const newZones: ROIZone[] = [];
     const cellWidth = gridGeneratorRect.w / numCols;
     const cellHeight = gridGeneratorRect.h / numRows;
+    
+    // Counter for sequential naming mode - start from existing ROIs count + 1
+    let counter = savedROIs.length + 1;
+    
+    // Get prefix from text field (e.g. 'ławka')
+    const prefix = gridPrefix.trim();
+    const prefixText = prefix ? `${prefix} ` : ''; // Add space if prefix is not empty
 
     for (let r = 0; r < numRows; r++) {
       for (let c = 0; c < numCols; c++) {
         const cellX = gridGeneratorRect.x + (c * cellWidth);
         const cellY = gridGeneratorRect.y + (r * cellHeight);
         
+        // Generate name based on naming mode
+        let name: string;
+        if (gridNamingMode === 'sequential') {
+          // Sequential mode: "Ławka 1", "Ławka 2", etc.
+          name = `${prefixText}${counter}`;
+          counter++;
+        } else {
+          // Grid mode: "R1-M1" or "M1-R1" based on naming order
+          if (gridNamingOrder === 'rows-cols') {
+            name = `R${r + 1}-M${c + 1}`;
+          } else {
+            name = `M${c + 1}-R${r + 1}`;
+          }
+          
+          // Add prefix if provided
+          if (gridPrefix.trim()) {
+            name = `${gridPrefix.trim()}-${name}`;
+          }
+        }
+        
         newZones.push({
           id: `grid-${r}-${c}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          name: `R${r + 1}-M${c + 1}`,
+          name: name,
           coords: {
             x: cellX,
             y: cellY,
@@ -452,6 +656,7 @@ const Settings: React.FC = () => {
     setGridGeneratorRect(null);
     setNumRows(4);
     setNumCols(5);
+    setGridPrefix('');
     setDrawingMode('none');
     
     setSnackbar({
@@ -504,6 +709,62 @@ const Settings: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Autosave function with debounce
+  const lastSavedROIsRef = useRef<ROIZone[]>([]);
+  useEffect(() => {
+    // Skip autosave on initial load
+    if (initialLoad) {
+      lastSavedROIsRef.current = savedROIs;
+      return;
+    }
+
+    // Skip if nothing changed
+    if (JSON.stringify(lastSavedROIsRef.current) === JSON.stringify(savedROIs)) {
+      return;
+    }
+
+    // Clear existing timeout
+    if (autosaveTimeoutRef.current) {
+      clearTimeout(autosaveTimeoutRef.current);
+    }
+
+    // Set new timeout for autosave
+    autosaveTimeoutRef.current = setTimeout(async () => {
+      try {
+        await settingsAPI.saveROIZones(savedROIs);
+        lastSavedROIsRef.current = savedROIs;
+        // Show subtle autosave notification (only when actually saved)
+        setSnackbar({
+          open: true,
+          message: 'Ustawienia zapisane automatycznie',
+          severity: 'success',
+          autoHideDuration: 1500,
+        } as typeof snackbar);
+      } catch (error) {
+        console.error('Autosave error:', error);
+        // Don't show error for autosave failures
+      }
+    }, 2000); // 2 second delay
+
+    // Cleanup
+    return () => {
+      if (autosaveTimeoutRef.current) {
+        clearTimeout(autosaveTimeoutRef.current);
+      }
+    };
+  }, [savedROIs, initialLoad]);
+
+  const handleResetAllROIs = () => {
+    setSavedROIs([]);
+    setSelectedROIId(null);
+    setResetDialogOpen(false);
+    setSnackbar({
+      open: true,
+      message: 'Wszystkie strefy zostały usunięte',
+      severity: 'info',
+    });
   };
 
   const handleCameraChange = (cameraIndex: number) => {
@@ -1036,6 +1297,7 @@ const Settings: React.FC = () => {
                           setDrawingMode('single');
                           setCurrentRect(null);
                           setGridGeneratorRect(null);
+                          setSelectedROIId(null);
                         }}
                       >
                         Rysuj Pojedynczą Strefę
@@ -1048,9 +1310,22 @@ const Settings: React.FC = () => {
                           setDrawingMode('grid');
                           setCurrentRect(null);
                           setGridGeneratorRect(null);
+                          setSelectedROIId(null);
                         }}
                       >
                         Generuj Siatkę (Grid)
+                      </Button>
+                      <Button
+                        variant={drawingMode === 'edit' ? 'contained' : 'outlined'}
+                        fullWidth
+                        startIcon={<Edit />}
+                        onClick={() => {
+                          setDrawingMode('edit');
+                          setCurrentRect(null);
+                          setGridGeneratorRect(null);
+                        }}
+                      >
+                        Tryb Edycji
                       </Button>
                       <Button
                         variant="outlined"
@@ -1059,6 +1334,7 @@ const Settings: React.FC = () => {
                           setDrawingMode('none');
                           setCurrentRect(null);
                           setGridGeneratorRect(null);
+                          setSelectedROIId(null);
                         }}
                       >
                         Anuluj
@@ -1117,8 +1393,63 @@ const Settings: React.FC = () => {
                           inputProps={{ min: 1, max: 50 }}
                           sx={{ mb: 2 }}
                         />
+                        <FormControl component="fieldset" sx={{ mb: 2 }}>
+                          <FormLabel component="legend">Tryb Nazywania</FormLabel>
+                          <RadioGroup
+                            row
+                            value={gridNamingMode}
+                            onChange={(e) => setGridNamingMode(e.target.value as 'sequential' | 'grid')}
+                          >
+                            <FormControlLabel 
+                              value="sequential" 
+                              control={<Radio />} 
+                              label="Kolejno (np. Ławka 1, 2, 3)" 
+                            />
+                            <FormControlLabel 
+                              value="grid" 
+                              control={<Radio />} 
+                              label="Siatka (np. R1-M1)" 
+                            />
+                          </RadioGroup>
+                        </FormControl>
+                        <TextField
+                          fullWidth
+                          size="small"
+                          label="Prefiks nazwy strefy (opcjonalnie)"
+                          value={gridPrefix}
+                          onChange={(e) => setGridPrefix(e.target.value)}
+                          placeholder={gridNamingMode === 'sequential' ? 'np. Ławka' : 'np. ławka'}
+                          sx={{ mb: 2 }}
+                        />
+                        {gridNamingMode === 'grid' && (
+                          <FormControl fullWidth size="small" sx={{ mb: 2 }}>
+                            <InputLabel>Kolejność nazewnictwa</InputLabel>
+                            <Select
+                              value={gridNamingOrder}
+                              label="Kolejność nazewnictwa"
+                              onChange={(e) => setGridNamingOrder(e.target.value as 'rows-cols' | 'cols-rows')}
+                            >
+                              <MenuItem value="rows-cols">Rzędy x Kolumny (R1-M1, R1-M2...)</MenuItem>
+                              <MenuItem value="cols-rows">Kolumny x Rzędy (M1-R1, M1-R2...)</MenuItem>
+                            </Select>
+                          </FormControl>
+                        )}
                         <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                          Utworzy {numRows * numCols} stref (R1-M1, R1-M2, ..., R{numRows}-M{numCols})
+                          Utworzy {numRows * numCols} stref
+                          {gridNamingMode === 'sequential' ? (
+                            <>
+                              {gridPrefix.trim() 
+                                ? ` (${gridPrefix.trim()} 1, ${gridPrefix.trim()} 2, ..., ${gridPrefix.trim()} ${numRows * numCols})`
+                                : ` (1, 2, ..., ${numRows * numCols})`}
+                            </>
+                          ) : (
+                            <>
+                              {gridPrefix.trim() && ` z prefiksem "${gridPrefix.trim()}"`}
+                              {gridNamingOrder === 'rows-cols' 
+                                ? ` (R1-M1, R1-M2, ..., R${numRows}-M${numCols})`
+                                : ` (M1-R1, M1-R2, ..., M${numCols}-R${numRows})`}
+                            </>
+                          )}
                         </Typography>
                         <Button
                           variant="contained"
@@ -1135,9 +1466,20 @@ const Settings: React.FC = () => {
                     {/* Lista zapisanych stref */}
                     {savedROIs.length > 0 && (
                       <Box sx={{ mt: 3 }}>
-                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                          Zapisane Strefy ({savedROIs.length})
-                        </Typography>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                          <Typography variant="subtitle2">
+                            Zapisane Strefy ({savedROIs.length})
+                          </Typography>
+                          <Button
+                            size="small"
+                            color="error"
+                            variant="outlined"
+                            startIcon={<Delete />}
+                            onClick={() => setResetDialogOpen(true)}
+                          >
+                            Resetuj Wszystkie
+                          </Button>
+                        </Box>
                         <Stack spacing={1}>
                           {savedROIs.map((zone) => (
                             <Paper
@@ -1210,7 +1552,7 @@ const Settings: React.FC = () => {
                     ref={wrapperRef}
               sx={{
                 position: 'relative',
-                      cursor: drawingMode !== 'none' ? 'crosshair' : 'default',
+                cursor: isDragging ? 'move' : isResizing ? (resizeHandle === 'nw' || resizeHandle === 'se' ? 'nwse-resize' : 'nesw-resize') : (drawingMode !== 'none' && drawingMode !== 'edit' ? 'crosshair' : 'default'),
                 width: '100%',
                 border: (theme) => `1px solid ${theme.palette.divider}`,
                 overflow: 'hidden',
@@ -1219,7 +1561,20 @@ const Settings: React.FC = () => {
                     onMouseMove={handleMouseMove}
                     onMouseUp={handleMouseUp}
               onMouseLeave={() => {
-                if (isDrawing) setIsDrawing(false);
+                if (isDrawing) {
+                  setIsDrawing(false);
+                  setDrawStart(null);
+                  setDrawEnd(null);
+                }
+                if (isDragging) {
+                  setIsDragging(false);
+                  setDragStart(null);
+                }
+                if (isResizing) {
+                  setIsResizing(false);
+                  setResizeHandle(null);
+                  setResizeStart(null);
+                }
               }}
             >
                     {/* Statyczny obraz konfiguracyjny */}
@@ -1255,36 +1610,107 @@ const Settings: React.FC = () => {
                     {wrapperRef.current && savedROIs.map((zone) => {
                       const rect = wrapperRef.current?.getBoundingClientRect();
                       if (!rect) return null;
+                      const isSelected = selectedROIId === zone.id;
+                      const canEdit = drawingMode === 'edit' || drawingMode === 'none';
+                      const roiX = zone.coords.x * rect.width;
+                      const roiY = zone.coords.y * rect.height;
+                      const roiW = zone.coords.w * rect.width;
+                      const roiH = zone.coords.h * rect.height;
+                      
                       return (
                         <div
                           key={zone.id}
-                  style={{
-                    position: 'absolute',
-                            border: '2px solid #4caf50',
-                            backgroundColor: 'rgba(76, 175, 80, 0.2)',
-                            left: zone.coords.x * rect.width,
-                            top: zone.coords.y * rect.height,
-                            width: zone.coords.w * rect.width,
-                            height: zone.coords.h * rect.height,
-                            pointerEvents: 'none',
+                          style={{
+                            position: 'absolute',
+                            border: isSelected ? '3px solid #ffc107' : '2px solid #4caf50',
+                            backgroundColor: isSelected ? 'rgba(255, 193, 7, 0.3)' : 'rgba(76, 175, 80, 0.2)',
+                            left: roiX,
+                            top: roiY,
+                            width: roiW,
+                            height: roiH,
+                            pointerEvents: canEdit ? 'auto' : 'none',
+                            cursor: canEdit ? (isSelected ? 'move' : 'pointer') : 'default',
                           }}
                         >
                           <Typography
                             variant="caption"
                             sx={{
                               position: 'absolute',
-                              top: -20,
+                              top: -24,
                               left: 0,
-                              bgcolor: 'rgba(76, 175, 80, 0.9)',
+                              bgcolor: isSelected ? 'rgba(255, 193, 7, 0.95)' : 'rgba(76, 175, 80, 0.9)',
                               color: 'white',
                               px: 0.5,
                               borderRadius: 0.5,
                               fontSize: '0.7rem',
                               whiteSpace: 'nowrap',
+                              fontWeight: isSelected ? 600 : 400,
                             }}
                           >
                             {zone.name}
                           </Typography>
+                          
+                          {/* Resize handles */}
+                          {isSelected && canEdit && (
+                            <>
+                              {/* NW corner */}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  left: -4,
+                                  top: -4,
+                                  width: 8,
+                                  height: 8,
+                                  backgroundColor: '#ffc107',
+                                  border: '2px solid white',
+                                  borderRadius: '50%',
+                                  cursor: 'nw-resize',
+                                }}
+                              />
+                              {/* NE corner */}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  right: -4,
+                                  top: -4,
+                                  width: 8,
+                                  height: 8,
+                                  backgroundColor: '#ffc107',
+                                  border: '2px solid white',
+                                  borderRadius: '50%',
+                                  cursor: 'ne-resize',
+                                }}
+                              />
+                              {/* SW corner */}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  left: -4,
+                                  bottom: -4,
+                                  width: 8,
+                                  height: 8,
+                                  backgroundColor: '#ffc107',
+                                  border: '2px solid white',
+                                  borderRadius: '50%',
+                                  cursor: 'sw-resize',
+                                }}
+                              />
+                              {/* SE corner */}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  right: -4,
+                                  bottom: -4,
+                                  width: 8,
+                                  height: 8,
+                                  backgroundColor: '#ffc107',
+                                  border: '2px solid white',
+                                  borderRadius: '50%',
+                                  cursor: 'se-resize',
+                                }}
+                              />
+                            </>
+                          )}
                         </div>
                       );
                     })}
@@ -1615,10 +2041,35 @@ const Settings: React.FC = () => {
         </Box>
       </Paper>
 
+      {/* Reset Dialog */}
+      <Dialog
+        open={resetDialogOpen}
+        onClose={() => setResetDialogOpen(false)}
+        aria-labelledby="reset-dialog-title"
+        aria-describedby="reset-dialog-description"
+      >
+        <DialogTitle id="reset-dialog-title">
+          Potwierdź usunięcie wszystkich stref
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText id="reset-dialog-description">
+            Czy na pewno chcesz usunąć wszystkie {savedROIs.length} zapisane strefy? Ta operacja jest nieodwracalna.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setResetDialogOpen(false)} color="inherit">
+            Anuluj
+          </Button>
+          <Button onClick={handleResetAllROIs} color="error" variant="contained" autoFocus>
+            Usuń wszystkie
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* Snackbar for Feedback */}
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={4000}
+        autoHideDuration={snackbar.autoHideDuration || 4000}
         onClose={() => setSnackbar({ ...snackbar, open: false })}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
       >

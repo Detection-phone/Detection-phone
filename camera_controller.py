@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime, timedelta, time as dt_time
 import cv2
 from ultralytics import YOLO
 import os
@@ -69,6 +69,14 @@ class CameraController:
             'roi_coordinates': None
         }
         self.detection_queue = Queue()
+        
+        # ROI zones for per-zone throttling
+        self.roi_zones = []  # Lista słowników, np. [{'name': 'ławka 1', 'coords': {'x': 0.1, 'y': 0.1, 'w': 0.2, 'h': 0.2}}]
+        
+        # Per-zone throttling infrastructure
+        self.alert_mute_until = {}  # Słownik: {'nazwa_strefy': datetime_obiekt}
+        self.mute_duration = timedelta(minutes=5)
+        self.alert_lock = threading.Lock()  # Zabezpieczenie słownika
         
         # Uruchom AnonymizerWorker (offline anonimizacja + SMS notifications)
         # Przekaż referencję do settings, aby worker miał dostęp do 'sms_notifications'
@@ -471,7 +479,64 @@ class CameraController:
             self.schedule_check_thread.start()
             print("Started schedule check thread for next schedule")
 
-    def _handle_detection(self, frame, confidence):
+    def update_roi_zones(self, new_zones_list):
+        """Publiczna metoda do aktualizacji stref ROI z zewnątrz (np. z app.py)."""
+        print(f"Aktualizowanie stref ROI. Załadowano {len(new_zones_list)} stref.")
+        self.roi_zones = new_zones_list
+
+    def find_matching_zone(self, center_x, center_y, frame_width, frame_height):
+        """Sprawdza, czy punkt (x, y) detekcji wpada w którąś ze zdefiniowanych stref ROI."""
+        # Znormalizuj współrzędne detekcji (0.0 do 1.0)
+        norm_x = center_x / frame_width
+        norm_y = center_y / frame_height
+
+        for zone in self.roi_zones:
+            # Zakładamy, że 'coords' to {'x': 0.1, 'y': 0.1, 'w': 0.2, 'h': 0.2} w formacie znormalizowanym
+            coords = zone.get('coords', {})
+            if not isinstance(coords, dict):
+                continue
+            
+            x = coords.get('x', 0)
+            y = coords.get('y', 0)
+            w = coords.get('w', 0)
+            h = coords.get('h', 0)
+            
+            # Oblicz x2 i y2 (prawy dolny róg)
+            x2 = x + w
+            y2 = y + h
+
+            if x <= norm_x <= x2 and y <= norm_y <= y2:
+                return zone.get('name')  # Zwróć nazwę strefy (np. "ławka 1")
+
+        return None  # Nie znaleziono dopasowania
+
+    def trigger_throttled_notification(self, zone_name, frame, confidence):
+        """Sprawdza wyciszenie i wysyła powiadomienie dla danej strefy."""
+        now = datetime.now()
+
+        with self.alert_lock:
+            # 1. Sprawdź, czy strefa jest wyciszona
+            if zone_name in self.alert_mute_until:
+                if now < self.alert_mute_until[zone_name]:
+                    # JEST WYCISZONA. Ignoruj.
+                    mute_until_str = self.alert_mute_until[zone_name].strftime('%H:%M:%S')
+                    print(f"🔇 Strefa '{zone_name}' jest wyciszona do {mute_until_str}. Pomijam alert.")
+                    return
+                else:
+                    # Czas wyciszenia minął
+                    self.alert_mute_until.pop(zone_name, None)
+
+            # 2. NIE JEST WYCISZONA. Wyślij alerty.
+            print(f"📱 WYKRYTO TELEFON w strefie '{zone_name}'. Wysyłanie alertów...")
+
+            # Wywołaj _handle_detection z informacją o strefie
+            self._handle_detection(frame, confidence, zone_name)
+
+            # 3. Ustaw nowe wyciszenie dla TEJ STREFY
+            print(f"⏰ Ustawiam 5-minutowe wyciszenie dla strefy '{zone_name}'.")
+            self.alert_mute_until[zone_name] = now + self.mute_duration
+
+    def _handle_detection(self, frame, confidence, zone_name=None):
         """
         Obsługuje wykrycie telefonu:
         1. Zapisuje ORYGINALNĄ klatkę (bez zamazanych twarzy!)
@@ -502,7 +567,8 @@ class CameraController:
             detection_data = {
                 'filepath': filepath,  # Pełna ścieżka
                 'confidence': confidence,
-                'should_blur': should_blur  # Pipe the setting!
+                'should_blur': should_blur,  # Pipe the setting!
+                'zone_name': zone_name  # Nazwa strefy (np. "ławka 1") lub None
             }
             self.detection_queue.put(detection_data)
             blur_status = "z zamazaniem" if should_blur else "BEZ zamazania"
@@ -645,8 +711,7 @@ class CameraController:
                             continue
                             
                         results = self.model(frame, verbose=False)  # Używa ORYGINALNEJ klatki
-                        # Read ROI once per batch
-                        roi = self.settings.get('roi_coordinates')
+                        # Pobierz wymiary klatki do normalizacji
                         frame_height, frame_width = frame.shape[:2]
                         
                         for result in results:
@@ -660,24 +725,40 @@ class CameraController:
                                 class_id = int(box.cls[0])
                                 confidence = float(box.conf[0])
                                 if class_id == self.phone_class_id and confidence >= self.settings['confidence_threshold']:
-                                    # If ROI defined, filter by center point falling inside ROI (normalized)
-                                    allow = True
-                                    if roi and isinstance(roi, (list, tuple)) and len(roi) == 4:
-                                        try:
-                                            x1f, y1f, x2f, y2f = [float(v) for v in roi]
-                                        except Exception:
-                                            x1f, y1f, x2f, y2f = 0.0, 0.0, 1.0, 1.0
-                                        bx1, by1, bx2, by2 = map(float, box.xyxy[0])
-                                        center_x = (bx1 + bx2) / 2.0
-                                        center_y = (by1 + by2) / 2.0
-                                        norm_cx = center_x / max(1, frame_width)
-                                        norm_cy = center_y / max(1, frame_height)
-                                        allow = (x1f <= norm_cx <= x2f) and (y1f <= norm_cy <= y2f)
-                                    if not allow:
-                                        # Skip detection outside ROI
+                                    # Oblicz środek detekcji
+                                    bx1, by1, bx2, by2 = map(float, box.xyxy[0])
+                                    center_x = (bx1 + bx2) / 2.0
+                                    center_y = (by1 + by2) / 2.0
+                                    
+                                    # Znajdź, w której strefie jest telefon
+                                    matched_zone = self.find_matching_zone(center_x, center_y, frame_width, frame_height)
+                                    
+                                    if matched_zone:
+                                        # Mamy trafienie w strefę! Uruchom logikę throttlingu
+                                        self.trigger_throttled_notification(matched_zone, frame.copy(), confidence)
+                                    elif len(self.roi_zones) > 0:
+                                        # Są zdefiniowane strefy, ale telefon nie trafił w żadną - pomijamy
                                         continue
+                                    else:
+                                        # Brak zdefiniowanych stref - użyj starej logiki (kompatybilność wsteczna)
+                                        # Sprawdź legacy ROI jeśli istnieje
+                                        roi = self.settings.get('roi_coordinates')
+                                        allow = True
+                                        if roi and isinstance(roi, (list, tuple)) and len(roi) == 4:
+                                            try:
+                                                x1f, y1f, x2f, y2f = [float(v) for v in roi]
+                                            except Exception:
+                                                x1f, y1f, x2f, y2f = 0.0, 0.0, 1.0, 1.0
+                                            norm_cx = center_x / max(1, frame_width)
+                                            norm_cy = center_y / max(1, frame_height)
+                                            allow = (x1f <= norm_cx <= x2f) and (y1f <= norm_cy <= y2f)
+                                        if not allow:
+                                            continue
+                                        
+                                        # Użyj starej metody _handle_detection bez strefy
+                                        self._handle_detection(frame.copy(), confidence, None)
 
-                                    print(f"📱 Phone detected with confidence: {confidence}")
+                                    # Rysuj bounding box na wyświetlanej klatce
                                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                                     
                                     # Validate and clamp coordinates to frame bounds
@@ -692,16 +773,16 @@ class CameraController:
                                             cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
                                             # Clamp text position to avoid negative y
                                             text_y = max(10, y1 - 10)
-                                            cv2.putText(display_frame, f"Phone: {confidence:.2f}", (x1, text_y),
+                                            label = f"Phone: {confidence:.2f}"
+                                            if matched_zone:
+                                                label += f" [{matched_zone}]"
+                                            cv2.putText(display_frame, label, (x1, text_y),
                                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                                         except Exception as draw_err:
                                             print(f"Error drawing phone box: {draw_err}")
                                     
-                                    # ZAPISZ ORYGINALNĄ klatkę (bez zamazanych twarzy)
-                                    try:
-                                        self._handle_detection(frame.copy(), confidence)
-                                    except Exception as copy_err:
-                                        print(f"Error copying frame for detection: {copy_err}")
+                                    # Opcjonalnie: break, jeśli wystarczy nam jeden telefon na klatkę
+                                    # break
                                 # Draw bounding box for person (tylko na wyświetlanej klatce)
                                 if class_id == 0 and confidence >= 0.5:  # 0 is 'person' in COCO
                                     x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -1228,7 +1309,7 @@ class AnonymizerWorker(threading.Thread):
                 # ZAWSZE zapisz do bazy danych (niezależnie od blur)
                 # Jeśli blur=False, zapisujemy oryginalny plik
                 # Jeśli blur=True, zapisujemy zanonimizowany plik
-                self._save_to_database(filepath, confidence)
+                self._save_to_database(task_data)
                 
                 # KLUCZOWY WARUNEK: Sprawdź czy KTÓRYKOLWIEK rodzaj powiadomień jest włączony
                 sms_enabled = self.settings.get('sms_notifications', False)
@@ -1245,7 +1326,7 @@ class AnonymizerWorker(threading.Thread):
                     # Uruchom w osobnym wątku aby nie blokować pętli run
                     notification_thread = threading.Thread(
                         target=self._handle_cloud_notification,
-                        args=(filepath, confidence),
+                        args=(filepath, confidence, zone_name),
                         daemon=True
                     )
                     notification_thread.start()
@@ -1304,13 +1385,14 @@ class AnonymizerWorker(threading.Thread):
             print(f"❌ Błąd wysyłania na Cloudinary: {e}")
             return None
     
-    def _send_sms_notification(self, public_link, confidence):
+    def _send_sms_notification(self, public_link, confidence, zone_name=None):
         """
         Wysyła powiadomienie SMS przez Vonage (Nexmo).
         
         Args:
             public_link: Link do pliku na Google Drive (lub None jeśli upload się nie powiódł)
             confidence: Pewność detekcji
+            zone_name: Nazwa strefy (np. "ławka 1") lub None
             
         Returns:
             True jeśli sukces, False w przeciwnym razie
@@ -1322,12 +1404,13 @@ class AnonymizerWorker(threading.Thread):
             
             # Przygotuj treść wiadomości
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            location = zone_name or self.settings.get('camera_name', 'Camera 1')
             
             if public_link:
                 message_body = (
                     f"Phone Detection Alert!\n"
                     f"Time: {timestamp}\n"
-                    f"Location: Camera 1\n"
+                    f"Location: {location}\n"
                     f"Confidence: {confidence:.2%}\n"
                     f"Image: {public_link}\n"
                     f"---"  # Padding dla Vonage demo - chroni link przed [FREE SMS DEMO...]
@@ -1337,7 +1420,7 @@ class AnonymizerWorker(threading.Thread):
                 message_body = (
                     f"Phone Detection Alert!\n"
                     f"Time: {timestamp}\n"
-                    f"Location: Camera 1\n"
+                    f"Location: {location}\n"
                     f"Confidence: {confidence:.2%}\n"
                     f"(Image upload failed)\n"
                     f"---"  # Padding dla Vonage demo
@@ -1445,13 +1528,14 @@ class AnonymizerWorker(threading.Thread):
             traceback.print_exc()
             return False
     
-    def _handle_cloud_notification(self, filepath, confidence):
+    def _handle_cloud_notification(self, filepath, confidence, zone_name=None):
         """
         Orkiestrator powiadomień - upload na Cloudinary i wysyłka SMS/Email.
         
         Args:
             filepath: Ścieżka do pliku
             confidence: Pewność detekcji
+            zone_name: Nazwa strefy (np. "ławka 1") lub None
         """
         try:
             print(f"🚀 Rozpoczynam wysyłkę powiadomienia dla: {filepath}")
@@ -1465,7 +1549,7 @@ class AnonymizerWorker(threading.Thread):
                 # 2. Wyślij SMS jeśli włączony
                 if self.settings.get('sms_notifications', False):
                     print("📱 SMS notifications włączone - wysyłanie...")
-                    success = self._send_sms_notification(public_link, confidence)
+                    success = self._send_sms_notification(public_link, confidence, zone_name)
                     if success:
                         print(f"✅ SMS wysłany z linkiem do zdjęcia!")
                     else:
@@ -1476,7 +1560,7 @@ class AnonymizerWorker(threading.Thread):
                 # 3. Wyślij Email jeśli włączony
                 if self.settings.get('email_notifications', False):
                     print("📧 Email notifications włączone - wysyłanie...")
-                    location = self.settings.get('camera_name', 'Camera 1')
+                    location = zone_name or self.settings.get('camera_name', 'Camera 1')
                     self._send_email_notification(
                         public_link,
                         filepath,
@@ -1491,7 +1575,7 @@ class AnonymizerWorker(threading.Thread):
                 
                 if self.settings.get('sms_notifications', False):
                     print("   ale wyślę SMS bez linku")
-                    success = self._send_sms_notification(None, confidence)
+                    success = self._send_sms_notification(None, confidence, zone_name)
                     if success:
                         print(f"✅ SMS wysłany (bez linku)")
                     else:
@@ -1500,7 +1584,7 @@ class AnonymizerWorker(threading.Thread):
                 # Email z informacją o braku linku
                 if self.settings.get('email_notifications', False):
                     print("📧 Email notifications włączone - wysyłanie (bez linku Cloudinary)...")
-                    location = self.settings.get('camera_name', 'Camera 1')
+                    location = zone_name or self.settings.get('camera_name', 'Camera 1')
                     # Wyślij z tekstem zamiast linku
                     self._send_email_notification(
                         "(Upload do Cloudinary nie powiódł się)",
@@ -1625,17 +1709,22 @@ class AnonymizerWorker(threading.Thread):
             print(f"❌ Błąd anonimizacji: {e}")
             return False
     
-    def _save_to_database(self, filepath, confidence):
+    def _save_to_database(self, detection_data):
         """Zapisuje wykrycie do bazy danych (tylko zanonimizowany obraz)"""
         try:
             from app import app
+            filepath = detection_data.get('filepath')
+            confidence = detection_data.get('confidence', 0.0)
+            zone_name = detection_data.get('zone_name')
             filename = os.path.basename(filepath)
             
             with app.app_context():
                 admin_user = User.query.filter_by(username='admin').first()
                 if admin_user:
+                    # Użyj zone_name jeśli dostępne, w przeciwnym razie użyj nazwy kamery
+                    location = zone_name or self.settings.get('camera_name', 'Camera 1')
                     detection = Detection(
-                        location='Camera 1',
+                        location=location,
                         confidence=confidence,
                         image_path=filename,
                         status='Pending',
@@ -1643,7 +1732,7 @@ class AnonymizerWorker(threading.Thread):
                     )
                     db.session.add(detection)
                     db.session.commit()
-                    print(f"💾 Zapisano do DB: {filename}")
+                    print(f"💾 Zapisano do DB: {filename} (strefa: {location})")
                 else:
                     print("❌ Brak użytkownika admin")
         except Exception as e:
