@@ -57,15 +57,19 @@ login_manager.login_message_category = "danger"
 camera_controller = CameraController()
 logger.info("Camera controller initialized")
 
-# Load ROI zones from database on startup
+# Load ROI zones and assigned camera from database on startup
 with app.app_context():
     try:
         settings = Settings.get_or_create_default()
         if settings.roi_zones:
             camera_controller.update_roi_zones(settings.roi_zones)
             logger.info(f"Loaded {len(settings.roi_zones)} ROI zones on startup")
+        # Ustaw przypisaną kamerę
+        camera_index = camera_controller.settings.get('camera_index', 0)
+        camera_controller.set_assigned_camera(camera_index)
+        logger.info(f"Assigned camera index: {camera_index}")
     except Exception as e:
-        logger.error(f"Error loading ROI zones on startup: {e}")
+        logger.error(f"Error loading settings on startup: {e}")
 
 # Initialize YOLO model
 try:
@@ -352,15 +356,15 @@ def create_detection():
 @app.route('/api/settings', methods=['GET'])
 @login_required
 def get_settings():
-    # Get available cameras (with error handling)
+    # Get available cameras (with error handling) - używamy szybkiej metody z cache
     try:
-        available_cameras = CameraController.scan_available_cameras()
+        available_cameras = camera_controller.get_available_cameras()
         # Ensure it's always a list
         if not isinstance(available_cameras, list):
-            logger.warning("scan_available_cameras() did not return a list, using empty list")
+            logger.warning("get_available_cameras() did not return a list, using empty list")
             available_cameras = []
     except Exception as e:
-        logger.error(f"BŁĄD KRYTYCZNY podczas skanowania kamer: {e}")
+        logger.error(f"BŁĄD podczas pobierania listy kamer: {e}")
         import traceback
         traceback.print_exc()
         available_cameras = []
@@ -438,7 +442,10 @@ def update_settings():
         
         # Handle camera selection
         if 'camera_index' in data:
-            camera_settings['camera_index'] = int(data['camera_index'])
+            camera_index = int(data['camera_index'])
+            camera_settings['camera_index'] = camera_index
+            # Ustaw przypisaną kamerę w kontrolerze
+            camera_controller.set_assigned_camera(camera_index)
         if 'camera_name' in data:
             camera_settings['camera_name'] = data['camera_name']
         
@@ -834,32 +841,36 @@ def config_snapshot():
     """
     Endpoint do pobrania pojedynczego, zanonimizowanego zdjęcia konfiguracyjnego.
     Użytkownik może użyć tego obrazu do rysowania ROI bez naruszania prywatności.
+    
+    UWAGA: Ten endpoint NIE czyta z kamery bezpośrednio!
+    Pobiera tylko ostatnią klatkę z pętli detekcji (_camera_loop).
     """
     try:
-        # Pobierz ostatnią klatkę z kamery
+        # 1. Pobierz pasywnie ostatnią klatkę z kontrolera
         frame = camera_controller.get_last_frame()
         
+        # 2. Sprawdź, czy pętla detekcji w ogóle działa
         if frame is None:
-            return jsonify({'error': 'Kamera jest offline'}), 409
+            # Pętla nie działa, więc klatka jest 'None'
+            return jsonify({
+                'error': 'Kamera jest zatrzymana. Uruchom kamerę w panelu "Camera Control" i spróbuj ponownie.'
+            }), 409  # 409 Conflict - stan zasobu jest niepoprawny
         
-        # Załaduj model YOLO do anonimizacji (jeśli jeszcze nie załadowany)
-        # Używamy tego samego modelu co AnonymizerWorker
-        anonymization_model = None
+        # 3. Klatka istnieje. Zanonimizuj ją.
         try:
-            anonymization_model = YOLO('yolov8n.pt')
+            anonymized_frame = camera_controller.anonymize_frame_logic(frame)
+            
+            ret, buffer = cv2.imencode('.jpg', anonymized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not ret:
+                raise Exception("Nie udało się zakodować obrazu na JPEG.")
+            
+            return Response(buffer.tobytes(), mimetype='image/jpeg')
+            
         except Exception as e:
-            logger.warning(f"Could not load anonymization model: {e}")
-        
-        # Zaanonimizuj klatkę
-        anonymized_frame = anonymize_frame(frame, anonymization_model, camera_controller.settings)
-        
-        # Zakoduj do JPEG
-        ret, buffer = cv2.imencode('.jpg', anonymized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not ret:
-            return jsonify({'error': 'Błąd kodowania obrazu'}), 500
-        
-        # Zwróć jako surowe bajty
-        return Response(buffer.tobytes(), mimetype='image/jpeg')
+            logger.error(f"Błąd podczas anonimizacji snapshotu: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'error': 'Błąd przetwarzania obrazu.'}), 500
         
     except Exception as e:
         logger.error(f"Error in config_snapshot endpoint: {e}")

@@ -36,6 +36,7 @@ class CameraController:
         self.is_running = False
         self.thread = None
         self.last_frame = None
+        self.frame_lock = threading.Lock()  # Lock dla bezpiecznego dostępu do last_frame
         
         # If camera_name is provided, try to find its index
         if camera_name:
@@ -46,9 +47,13 @@ class CameraController:
                 self.camera_index = camera_index
         else:
             self.camera_index = camera_index
+        
+        # Indeks kamery, który został wybrany w Ustawieniach (przypisany do monitorowania)
+        self.assigned_camera_index = self.camera_index
             
         print(f"Using camera index: {self.camera_index}")
-        
+        print(f"Assigned camera index: {self.assigned_camera_index}")
+            
         # Verify camera availability
         self._verify_camera()
         
@@ -112,6 +117,11 @@ class CameraController:
         # Będziemy analizować co 10. klatkę (dla 30 FPS = 3 detekcje na sekundę)
         self.process_every_n_frame = 10
         print(f"Frame skipping enabled: processing every {self.process_every_n_frame} frames")
+        
+        # NOWA LOGIKA: Skanuj kamery tylko raz przy starcie
+        print("INFO: Uruchamiam jednorazowe skanowanie kamer...")
+        self.available_cameras_list = self._scan_available_cameras_internal()
+        print(f"INFO: Skanowanie zakończone. Znaleziono {len(self.available_cameras_list)} kamer.")
 
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
@@ -328,24 +338,9 @@ class CameraController:
         try:
             # Reset manual stop flag on explicit manual start
             self.manual_stop_engaged = False
-            # Resolve target by NAME first if provided (more stable than index mapping)
-            desired_name = self.settings.get('camera_name')
-            resolved_index = None
-            if desired_name:
-                try:
-                    for cam in self.scan_available_cameras():
-                        if desired_name.lower() in cam.get('name', '').lower():
-                            resolved_index = int(cam['index'])
-                            break
-                except Exception:
-                    resolved_index = None
-
-            # Fall back to stored index if name not provided/found
-            if resolved_index is None:
-                resolved_index = int(self.settings.get('camera_index', self.camera_index))
-
-            self.camera_index = resolved_index
-            print(f"\nInitializing camera with STRICT index {self.camera_index} (desired='{desired_name}')...")
+            # Użyj przypisanego indeksu kamery (nie skanuj!)
+            self.camera_index = self.assigned_camera_index
+            print(f"\nInitializing camera with STRICT index {self.camera_index} (assigned camera)...")
 
             self.camera = None
             last_error = None
@@ -375,7 +370,7 @@ class CameraController:
                     print(last_error)
                 print("Strict mode: not falling back to any other camera index.")
                 print("\n===============================================================")
-                print(f"[BŁĄD KRYTYCZNY] Nie można otworzyć kamery (Index: {self.camera_index})!")
+                print(f"[BŁĄD KRYTYCZNY] Nie można otworzyć kamery (Index: {self.assigned_camera_index})!")
                 print("PRZYCZYNA: Kamera jest prawdopodobnie UŻYWANA PRZEZ INNĄ APLIKACJĘ.")
                 print("ROZWIĄZANIE: Zamknij WSZYSTKIE inne programy, które mogą używać tej kamery")
                 print("(np. okno Ustawień Windows, klient Iriun, Zoom, OBS, Teams)")
@@ -384,14 +379,6 @@ class CameraController:
                 self.is_running = False
                 self.camera = None
                 return
-            
-            # Optional assertion: verify that the opened device corresponds to desired_name
-            if desired_name:
-                opened_name = self._get_camera_name_by_index(self.camera_index)
-                if opened_name and desired_name.lower() not in opened_name.lower():
-                    # Do NOT stop; align internal settings to actual opened device to prevent confusion
-                    print(f"Device name mismatch: opened='{opened_name}', desired='{desired_name}'. Using opened device and updating settings.")
-                    self.settings['camera_name'] = opened_name
             
             # Configure codec and resolution with validation
             try:
@@ -478,6 +465,15 @@ class CameraController:
             self.schedule_check_thread.daemon = True
             self.schedule_check_thread.start()
             print("Started schedule check thread for next schedule")
+
+    def set_assigned_camera(self, index):
+        """Ustawia, który indeks kamery ma być monitorowany."""
+        print(f"Kontroler przypisany do monitorowania kamery o indeksie: {index}")
+        self.assigned_camera_index = index
+        # Opcjonalnie: jeśli kamera jest uruchomiona, zatrzymaj ją (użytkownik będzie musiał uruchomić ponownie)
+        if self.is_running:
+            print("Kamera jest uruchomiona. Zatrzymywanie, aby zastosować nowy indeks...")
+            self.stop_camera()
 
     def update_roi_zones(self, new_zones_list):
         """Publiczna metoda do aktualizacji stref ROI z zewnątrz (np. z app.py)."""
@@ -596,23 +592,25 @@ class CameraController:
                 
                 # Sprawdzenie, czy kamera jest otwarta
                 if not self.camera or not self.camera.isOpened():
-                    print("Camera is not opened, attempting to reopen...")
+                    # --- TO JEST JEDYNA POPRAWNA LOGIKA ODZYSKIWANIA ---
+                    print(f"Ostrzeżenie: Kamera (indeks {self.assigned_camera_index}) jest zamknięta. Próba ponownego otwarcia...")
                     try:
                         if self.camera is not None:
                             self.camera.release()
-                        self.camera = self._open_capture(self.camera_index)
+                        self.camera = self._open_capture(self.assigned_camera_index)
                         if self.camera is None or not self.camera.isOpened():
-                            print("Failed to reopen camera, waiting...")
-                            time.sleep(1)
-                            continue
-                        # Reset properties after reopen
-                        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                        print("Camera reopened successfully")
+                            print("BŁĄD: Ponowne otwarcie kamery nie powiodło się. Czekam 5 sekund...")
+                            time.sleep(5)
+                        else:
+                            # Reset properties after reopen
+                            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                            print("Camera reopened successfully")
                     except Exception as e:
-                        print(f"Error reopening camera: {e}")
-                        time.sleep(1)
-                        continue
+                        print(f"BŁĄD podczas ponownego otwarcia kamery: {e}. Czekam 5 sekund...")
+                        time.sleep(5)
+                    continue  # Spróbuj ponownie w następnej pętli
+                    # --- KONIEC LOGIKI ODZYSKIWANIA ---
                 
                 ret, frame = self.camera.read()
                 
@@ -638,14 +636,14 @@ class CameraController:
                     consecutive_failures += 1
                     # Try to recover by re-opening the camera after a few failures
                     if consecutive_failures >= 5:
-                        print("Too many read failures, attempting to reopen camera...")
+                        print(f"Zbyt wiele błędów odczytu, próba ponownego otwarcia kamery (indeks {self.assigned_camera_index})...")
                         try:
                             if self.camera is not None:
                                 self.camera.release()
-                            self.camera = self._open_capture(self.camera_index)
+                            self.camera = self._open_capture(self.assigned_camera_index)
                             if self.camera is None or not self.camera.isOpened() or not self._capture_has_valid_frame(self.camera):
-                                print("Reopen failed; will retry shortly")
-                                time.sleep(1)
+                                print("BŁĄD: Ponowne otwarcie kamery nie powiodło się. Czekam 5 sekund...")
+                                time.sleep(5)
                                 continue
                             # Reset properties after reopen
                             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -653,8 +651,8 @@ class CameraController:
                             consecutive_failures = 0
                             print("Camera reopened successfully")
                         except Exception as e:
-                            print(f"Error while reopening camera: {e}")
-                            time.sleep(1)
+                            print(f"BŁĄD podczas ponownego otwarcia kamery: {e}. Czekam 5 sekund...")
+                            time.sleep(5)
                             continue
                     # Daj kamerze chwilę na odzyskanie
                     time.sleep(0.1)
@@ -663,7 +661,8 @@ class CameraController:
                 # Dopiero teraz klatka jest bezpieczna - ustawiamy last_frame PRZED wszystkimi innymi operacjami
                 consecutive_failures = 0
                 try:
-                    self.last_frame = frame.copy()
+                    with self.frame_lock:
+                        self.last_frame = frame.copy()
                 except Exception as e:
                     print(f"Error copying frame to last_frame: {e}")
                     time.sleep(0.1)
@@ -848,11 +847,95 @@ class CameraController:
             return None
 
     def get_last_frame(self):
-        """Return the latest raw frame (numpy array) or None if unavailable."""
+        """Zwraca kopię ostatniej klatki w sposób bezpieczny wątkowo (jeśli istnieje)."""
+        if self.last_frame is not None:
+            with self.frame_lock:
+                try:
+                    return self.last_frame.copy()
+                except Exception as e:
+                    print(f"Error copying frame in get_last_frame: {e}")
+                    return None
+        return None
+
+    def anonymize_frame_logic(self, frame):
+        """
+        Anonimizuje górną część ciała osób na numpy array (frame).
+        Używa modelu YOLO z AnonymizerWorker lub tworzy własny jeśli potrzeba.
+        
+        Args:
+            frame: numpy array (BGR image)
+            
+        Returns:
+            anonymized_frame: numpy array z zanonimizowanymi osobami
+        """
         try:
-            return self.last_frame
-        except Exception:
-            return None
+            # Użyj modelu z AnonymizerWorker jeśli dostępny
+            anonymization_model = None
+            if hasattr(self, 'anonymizer_worker') and self.anonymizer_worker.model is not None:
+                anonymization_model = self.anonymizer_worker.model
+            else:
+                # Fallback: spróbuj załadować model YOLO
+                try:
+                    from ultralytics import YOLO
+                    anonymization_model = YOLO('yolov8n.pt')
+                except Exception as e:
+                    print(f"Could not load anonymization model: {e}")
+                    return frame.copy()  # Zwróć oryginał jeśli nie można załadować modelu
+            
+            if anonymization_model is None:
+                return frame.copy()
+            
+            # Kopiuj klatkę aby nie modyfikować oryginału
+            anonymized_frame = frame.copy()
+            img_h, img_w = anonymized_frame.shape[:2]
+            
+            # Wykryj osoby za pomocą YOLO
+            results = anonymization_model(frame, verbose=False)
+            persons_found = 0
+            
+            # Parametry blur (używamy tych samych co w AnonymizerWorker)
+            blur_kernel_size = 99
+            blur_sigma = 30
+            upper_body_ratio = 0.50  # Zamazujemy górne 50% ciała
+            
+            # Przetwórz wyniki
+            for result in results:
+                boxes = result.boxes
+                if boxes is None:
+                    continue
+                for box in boxes:
+                    class_id = int(box.cls[0])
+                    confidence = float(box.conf[0])
+                    
+                    # Szukamy tylko klasy 'person' (0 w COCO)
+                    if class_id == 0 and confidence >= 0.5:
+                        persons_found += 1
+                        
+                        # Pobierz pełny bounding box osoby
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        
+                        # Oblicz wysokość bbox osoby
+                        person_height = y2 - y1
+                        
+                        # Oblicz górną część ciała (konfigurowalny % od góry)
+                        upper_body_height = int(person_height * upper_body_ratio)
+                        upper_y1 = y1
+                        upper_y2 = min(y1 + upper_body_height, img_h)
+                        
+                        # Zamazuj tylko górną część ciała
+                        upper_body_roi = anonymized_frame[upper_y1:upper_y2, x1:x2]
+                        if upper_body_roi.size > 0:
+                            blurred_roi = cv2.GaussianBlur(upper_body_roi, (blur_kernel_size, blur_kernel_size), blur_sigma)
+                            anonymized_frame[upper_y1:upper_y2, x1:x2] = blurred_roi
+            
+            return anonymized_frame
+            
+        except Exception as e:
+            print(f"Error in anonymize_frame_logic: {e}")
+            import traceback
+            traceback.print_exc()
+            # W razie błędu zwróć oryginał
+            return frame.copy()
 
     def __del__(self):
         """Czysty shutdown - zatrzymaj kamerę i workera"""
@@ -916,9 +999,8 @@ class CameraController:
             print(f"    ⚠️ Exception in _capture_has_valid_frame_static: {e}")
         return False
 
-    @staticmethod
-    def scan_available_cameras():
-        """Scan and list all available camera devices and their indices"""
+    def _scan_available_cameras_internal(self):
+        """Wewnętrzna metoda do skanowania kamer - wywoływana tylko raz przy starcie."""
         available_cameras = []
         
         print("\n🔍 Starting camera scan...")
@@ -1104,6 +1186,18 @@ class CameraController:
         print(f"✅ Scan complete: Found {len(available_cameras)} available cameras")
         return available_cameras
 
+    def get_available_cameras(self):
+        """NOWA, SZYBKA metoda: Natychmiast zwraca zapisaną listę (bez skanowania)."""
+        return self.available_cameras_list if hasattr(self, 'available_cameras_list') else []
+
+    @staticmethod
+    def scan_available_cameras():
+        """DEPRECATED: Używaj camera_controller.get_available_cameras() zamiast tego.
+        Zachowana dla kompatybilności wstecznej, ale nie powinna być używana w nowym kodzie."""
+        print("⚠️ OSTRZEŻENIE: scan_available_cameras() jest DEPRECATED. Użyj camera_controller.get_available_cameras()")
+        # Zwróć pustą listę - nie skanujemy tutaj
+        return []
+
     def find_camera_by_name(self, camera_name):
         """Find camera index by device name using Media Foundation API"""
         try:
@@ -1115,11 +1209,11 @@ class CameraController:
             
             if result.returncode != 0:
                 print(f"Error getting camera list: {result.stderr}")
-                # Fallback to scanning
-                available_cameras = self.scan_available_cameras()
+                # Fallback to using cached camera list
+                available_cameras = self.get_available_cameras()
                 for camera in available_cameras:
                     if camera_name.lower() in camera['name'].lower():
-                        print(f"✅ Found camera '{camera_name}' at index {camera['index']} (via scan)")
+                        print(f"✅ Found camera '{camera_name}' at index {camera['index']} (via cached list)")
                         return camera['index']
                 return None
             
@@ -1151,12 +1245,12 @@ class CameraController:
                 if "Camera" in device_name or "Image" in device.get('PNPClass', ''):
                     current_index += 1
             
-            # If not found by exact name, try scanning available cameras
-            print("Camera not found by name, scanning available cameras...")
-            available_cameras = self.scan_available_cameras()
+            # If not found by exact name, try using cached camera list
+            print("Camera not found by name, checking cached camera list...")
+            available_cameras = self.get_available_cameras()
             for camera in available_cameras:
                 if camera_name.lower() in camera['name'].lower() or "iriun" in camera_name.lower() and "iriun" in camera['name'].lower():
-                    print(f"✅ Found camera '{camera_name}' at index {camera['index']} (via scan)")
+                    print(f"✅ Found camera '{camera_name}' at index {camera['index']} (via cached list)")
                     return camera['index']
             
             print(f"❌ Camera '{camera_name}' not found in device list")

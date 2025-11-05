@@ -8,6 +8,7 @@ import Detections from './pages/Detections';
 import Settings from './pages/Settings';
 import Login from './pages/Login';
 import { AuthProvider } from './contexts/AuthContext';
+import { ConfigProvider } from './contexts/ConfigContext';
 import theme from './theme';
 
 function App() {
@@ -16,15 +17,17 @@ function App() {
       <CssBaseline />
       <Router>
         <AuthProvider>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/" element={<Layout />}>
-              <Route index element={<Navigate to="/dashboard" replace />} />
-              <Route path="dashboard" element={<Dashboard />} />
-              <Route path="detections" element={<Detections />} />
-              <Route path="settings" element={<Settings />} />
-            </Route>
-          </Routes>
+          <ConfigProvider>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route path="/" element={<Layout />}>
+                <Route index element={<Navigate to="/dashboard" replace />} />
+                <Route path="dashboard" element={<Dashboard />} />
+                <Route path="detections" element={<Detections />} />
+                <Route path="settings" element={<Settings />} />
+              </Route>
+            </Routes>
+          </ConfigProvider>
         </AuthProvider>
       </Router>
     </ThemeProvider>

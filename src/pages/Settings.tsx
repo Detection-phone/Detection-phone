@@ -35,6 +35,7 @@ import {
 } from '@mui/material';
 import { LoadingButton } from '@mui/lab';
 import api, { settingsAPI, cameraAPI, CameraDevice, ROIZone } from '../services/api';
+import { useConfig } from '../contexts/ConfigContext';
 import {
   ExpandMore,
   Schedule,
@@ -154,8 +155,8 @@ const Settings: React.FC = () => {
   // ROI state
   const [isRoiExpanded, setIsRoiExpanded] = useState(false);
 
-  // Config photo state (for ROI configuration)
-  const [configPhotoUrl, setConfigPhotoUrl] = useState<string | null>(null);
+  // Config photo state (for ROI configuration) - using global context
+  const { configPhotoUrl, setConfigPhotoUrl } = useConfig();
   const [isLoadingPhoto, setIsLoadingPhoto] = useState(false);
 
   // New ROI zones state
@@ -300,14 +301,7 @@ const Settings: React.FC = () => {
     }
   };
 
-  // Cleanup blob URL on unmount
-  useEffect(() => {
-    return () => {
-      if (configPhotoUrl) {
-        URL.revokeObjectURL(configPhotoUrl);
-      }
-    };
-  }, [configPhotoUrl]);
+  // Note: Cleanup blob URL is now handled in ConfigContext
 
   const handleAccordionChange = (panel: string) => (_event: React.SyntheticEvent, isExpanded: boolean) => {
     setExpanded(isExpanded ? panel : false);
