@@ -578,6 +578,20 @@ def update_settings():
             pass
         db.session.commit()
         
+        # Dodaj ustawienia powiadomień do obiektu settings_db (dla kompatybilności)
+        # Model Settings nie ma tych pól w bazie, ale możemy je dodać jako atrybuty obiektu
+        if 'email_notifications' in camera_settings:
+            settings_db.email_notifications = camera_settings['email_notifications']
+            print(f"🔧 DEBUG: Ustawiono settings_db.email_notifications = {camera_settings['email_notifications']}")
+        if 'sms_notifications' in camera_settings:
+            settings_db.sms_notifications = camera_settings['sms_notifications']
+            print(f"🔧 DEBUG: Ustawiono settings_db.sms_notifications = {camera_settings['sms_notifications']}")
+        if 'camera_name' in camera_settings:
+            settings_db.camera_name = camera_settings['camera_name']
+        
+        # DEBUG: Sprawdź wartości przed przekazaniem
+        print(f"🔧 DEBUG: Przed update_settings - email_notifications: {getattr(settings_db, 'email_notifications', 'BRAK')}, sms_notifications: {getattr(settings_db, 'sms_notifications', 'BRAK')}")
+        
         # Przekaż zaktualizowany obiekt 'settings' do kontrolera
         camera_controller.update_settings(settings_db)
         

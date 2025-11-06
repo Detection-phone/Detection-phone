@@ -72,6 +72,9 @@ class CameraController:
         self.confidence_threshold = 0.2
         self.sms_notifications = False  # SMS notifications (Vonage + Cloudinary)
         self.email_notifications = False  # Email notifications (Yagmail + Cloudinary)
+        # Wewnętrzne zmienne do przechowywania stanu powiadomień (aktualizowalne w locie)
+        self.email_enabled = False
+        self.sms_enabled = False
         self.anonymization_percent = 50
         self.roi_coordinates = None  # ROI as normalized [x1, y1, x2, y2] or None
         
@@ -274,13 +277,69 @@ class CameraController:
             self.assigned_camera_index = int(settings_model.camera_index)
             print(f"INFO: Zaktualizowano przypisany indeks kamery: {self.assigned_camera_index}")
         
+        # --- AKTUALIZUJ WEWNĘTRZNE ZMIENNE POWIADOMIEŃ ---
+        # DEBUG: Sprawdź co otrzymaliśmy
+        print(f"🔧 DEBUG: update_settings otrzymał settings_model typu: {type(settings_model)}")
+        print(f"🔧 DEBUG: hasattr(settings_model, 'email_notifications'): {hasattr(settings_model, 'email_notifications')}")
+        if hasattr(settings_model, 'email_notifications'):
+            print(f"🔧 DEBUG: settings_model.email_notifications = {settings_model.email_notifications} (typ: {type(settings_model.email_notifications)})")
+        
+        # Sprawdź różne możliwe źródła danych (model może mieć różne struktury)
+        email_value = None
+        sms_value = None
+        
+        if hasattr(settings_model, 'email_notifications'):
+            email_value = settings_model.email_notifications
+            print(f"🔧 DEBUG: Odczytano email_notifications z atrybutu: {email_value}")
+        elif hasattr(settings_model, 'email_enabled'):
+            email_value = settings_model.email_enabled
+            print(f"🔧 DEBUG: Odczytano email_enabled z atrybutu: {email_value}")
+        elif isinstance(settings_model, dict) and 'email_notifications' in settings_model:
+            email_value = settings_model['email_notifications']
+            print(f"🔧 DEBUG: Odczytano email_notifications ze słownika: {email_value}")
+        
+        if email_value is not None:
+            self.email_enabled = bool(email_value)
+            self.email_notifications = bool(email_value)
+            print(f"🔧 DEBUG: Ustawiono self.email_enabled = {self.email_enabled}")
+        else:
+            print(f"⚠️  DEBUG: Nie znaleziono wartości email_notifications - pozostawiamy domyślną: {self.email_enabled}")
+        
+        if hasattr(settings_model, 'sms_notifications'):
+            sms_value = settings_model.sms_notifications
+            print(f"🔧 DEBUG: Odczytano sms_notifications z atrybutu: {sms_value}")
+        elif hasattr(settings_model, 'sms_enabled'):
+            sms_value = settings_model.sms_enabled
+            print(f"🔧 DEBUG: Odczytano sms_enabled z atrybutu: {sms_value}")
+        elif isinstance(settings_model, dict) and 'sms_notifications' in settings_model:
+            sms_value = settings_model['sms_notifications']
+            print(f"🔧 DEBUG: Odczytano sms_notifications ze słownika: {sms_value}")
+        
+        if sms_value is not None:
+            self.sms_enabled = bool(sms_value)
+            self.sms_notifications = bool(sms_value)
+            print(f"🔧 DEBUG: Ustawiono self.sms_enabled = {self.sms_enabled}")
+        else:
+            print(f"⚠️  DEBUG: Nie znaleziono wartości sms_notifications - pozostawiamy domyślną: {self.sms_enabled}")
+        
+        print(f"INFO: Zaktualizowano wewnętrzne zmienne powiadomień: email={self.email_enabled}, sms={self.sms_enabled}")
+        
         # Zaktualizuj słownik settings dla kompatybilności z AnonymizerWorker
+        self.settings['email_notifications'] = self.email_enabled
+        self.settings['sms_notifications'] = self.sms_enabled
+        if hasattr(settings_model, 'camera_name'):
+            self.settings['camera_name'] = settings_model.camera_name
+        
         self.settings.update({
             'schedule': self.schedule,
             'camera_index': self.assigned_camera_index,
         })
         
-        print(f"INFO: Aktualizacja ustawień zakończona.")
+        # --- KLUCZOWA LINIA: Przekaż ustawienia do workera (przekazujemy self, aby worker mógł odczytać zaktualizowane wartości) ---
+        if hasattr(self, 'anonymizer_worker') and self.anonymizer_worker is not None:
+            self.anonymizer_worker.update_worker_settings(self)
+        
+        print(f"INFO: Aktualizacja ustawień zakończona (przekazano do workera: email={self.email_enabled}, sms={self.sms_enabled}).")
     
     def update_settings_dict(self, settings):
         """Update camera settings from dict (legacy method, kept for compatibility)"""
@@ -1478,8 +1537,18 @@ class AnonymizerWorker(threading.Thread):
         
         # Użyj przekazanego klienta Vonage
         self.vonage_sms = vonage_sms
+        # Inicjalizuj zmienne Vonage (potrzebne do wysyłania SMS)
+        self.vonage_api_key = os.getenv('VONAGE_API_KEY')
+        self.vonage_api_secret = os.getenv('VONAGE_API_SECRET')
+        self.vonage_from_number = os.getenv('VONAGE_FROM_NUMBER', 'PhoneDetection')
+        self.vonage_to_number = os.getenv('VONAGE_TO_NUMBER')
+        
         if self.vonage_sms is not None:
             print("✅ AnonymizerWorker: Używam przekazanego klienta Vonage")
+            if self.vonage_to_number:
+                print(f"   Numer docelowy: {self.vonage_to_number}")
+            else:
+                print("⚠️  Brak numeru docelowego (VONAGE_TO_NUMBER) - SMS nie będzie działać")
         else:
             print("⚠️  AnonymizerWorker: Brak klienta Vonage - SMS będzie wyłączone")
         
@@ -1498,6 +1567,36 @@ class AnonymizerWorker(threading.Thread):
             print(f"✅ AnonymizerWorker: Dane Email załadowane (from: {self.email_user})")
         else:
             print("⚠️  AnonymizerWorker: Brak danych Email - email będzie wyłączony")
+        
+        # Ustawienia powiadomień - aktualizowalne w locie
+        self.email_enabled = False  # Domyślnie wyłączone
+        self.sms_enabled = False  # Domyślnie wyłączone
+        self.settings_lock = threading.Lock()  # Lock do ochrony ustawień
+        
+        # Inicjalizuj ustawienia z przekazanego słownika settings (jeśli dostępne)
+        if settings:
+            with self.settings_lock:
+                self.email_enabled = settings.get('email_notifications', False)
+                self.sms_enabled = settings.get('sms_notifications', False)
+                print(f"INFO: Worker zainicjalizowany z ustawieniami: email={self.email_enabled}, sms={self.sms_enabled}")
+    
+    def update_worker_settings(self, controller_instance):
+        """
+        Aktualizuje ustawienia powiadomień w locie (wywoływane z CameraController.update_settings).
+        Przyjmuje instancję kontrolera, aby odczytać zaktualizowane wartości.
+        """
+        with self.settings_lock:
+            # Odczytaj zaktualizowane wartości z KONTROLERA
+            self.email_enabled = controller_instance.email_enabled
+            self.sms_enabled = controller_instance.sms_enabled
+            
+            # Aktualizuj też słownik settings dla kompatybilności wstecznej
+            self.settings['email_notifications'] = self.email_enabled
+            self.settings['sms_notifications'] = self.sms_enabled
+            if hasattr(controller_instance, 'camera_name'):
+                self.settings['camera_name'] = controller_instance.camera_name
+        
+        print(f"INFO: Worker anonimizacji otrzymał nowe ustawienia powiadomień: email={self.email_enabled}, sms={self.sms_enabled}")
     
     def run(self):
         """Główna pętla workera - przetwarza zadania z kolejki"""
@@ -1544,14 +1643,18 @@ class AnonymizerWorker(threading.Thread):
                 self._save_to_database(task_data)
                 
                 # KLUCZOWY WARUNEK: Sprawdź czy KTÓRYKOLWIEK rodzaj powiadomień jest włączony
-                sms_enabled = self.settings.get('sms_notifications', False)
-                email_enabled = self.settings.get('email_notifications', False)
+                # Użyj zmiennych członkowskich (chronionych lockiem) zamiast self.settings
+                with self.settings_lock:
+                    email_on = self.email_enabled
+                    sms_on = self.sms_enabled
                 
-                if sms_enabled or email_enabled:
+                if not email_on and not sms_on:
+                    print(f"📵 Powiadomienia (Email/SMS) wyłączone - pomijam wysyłkę")
+                else:
                     notification_types = []
-                    if sms_enabled:
+                    if sms_on:
                         notification_types.append("SMS")
-                    if email_enabled:
+                    if email_on:
                         notification_types.append("Email")
                     
                     print(f"📲 Powiadomienia włączone ({', '.join(notification_types)}) - uruchamiam wysyłkę w tle")
@@ -1562,8 +1665,6 @@ class AnonymizerWorker(threading.Thread):
                         daemon=True
                     )
                     notification_thread.start()
-                else:
-                    print(f"📵 Powiadomienia (Email/SMS) wyłączone - pomijam wysyłkę")
                 
                 self.detection_queue.task_done()
                 
@@ -1634,6 +1735,10 @@ class AnonymizerWorker(threading.Thread):
                 print("❌ Klient Vonage nie jest zainicjalizowany")
                 return False
             
+            if not self.vonage_to_number:
+                print("❌ Brak numeru docelowego (VONAGE_TO_NUMBER) - nie można wysłać SMS")
+                return False
+            
             # Przygotuj treść wiadomości
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             location = zone_name or self.settings.get('camera_name', 'Camera 1')
@@ -1659,7 +1764,7 @@ class AnonymizerWorker(threading.Thread):
                 )
             
             # Vonage wymaga numeru bez '+' i jako string
-            to_number = self.vonage_to_number.replace('+', '')
+            to_number = str(self.vonage_to_number).replace('+', '')
             
             print(f"📱 Wysyłanie SMS na +{to_number}...")
             
@@ -1775,11 +1880,16 @@ class AnonymizerWorker(threading.Thread):
             # 1. Próbuj upload na Cloudinary (opcjonalnie)
             public_link = self._upload_to_cloudinary(filepath)
             
+            # Pobierz aktualne ustawienia powiadomień (chronione lockiem)
+            with self.settings_lock:
+                email_on = self.email_enabled
+                sms_on = self.sms_enabled
+            
             if public_link:
                 print(f"✅ Plik wysłany na Cloudinary")
                 
                 # 2. Wyślij SMS jeśli włączony
-                if self.settings.get('sms_notifications', False):
+                if sms_on:
                     print("📱 SMS notifications włączone - wysyłanie...")
                     success = self._send_sms_notification(public_link, confidence, zone_name)
                     if success:
@@ -1790,7 +1900,7 @@ class AnonymizerWorker(threading.Thread):
                     print("📵 SMS notifications wyłączone - pomijam SMS")
                 
                 # 3. Wyślij Email jeśli włączony
-                if self.settings.get('email_notifications', False):
+                if email_on:
                     print("📧 Email notifications włączone - wysyłanie...")
                     location = zone_name or self.settings.get('camera_name', 'Camera 1')
                     self._send_email_notification(
@@ -1805,7 +1915,7 @@ class AnonymizerWorker(threading.Thread):
                 # Cloudinary zawiodło - wyślij powiadomienia bez linku
                 print("⚠️  Nie udało się wysłać na Cloudinary")
                 
-                if self.settings.get('sms_notifications', False):
+                if sms_on:
                     print("   ale wyślę SMS bez linku")
                     success = self._send_sms_notification(None, confidence, zone_name)
                     if success:
@@ -1814,7 +1924,7 @@ class AnonymizerWorker(threading.Thread):
                         print(f"❌ Nie udało się wysłać SMS")
                 
                 # Email z informacją o braku linku
-                if self.settings.get('email_notifications', False):
+                if email_on:
                     print("📧 Email notifications włączone - wysyłanie (bez linku Cloudinary)...")
                     location = zone_name or self.settings.get('camera_name', 'Camera 1')
                     # Wyślij z tekstem zamiast linku
