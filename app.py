@@ -18,6 +18,12 @@ from camera_controller import CameraController
 import logging
 from flask_migrate import Migrate
 from sqlalchemy import func
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
+from vonage import Auth
+from vonage_sms import Sms
+from vonage_http_client import HttpClient
 
 # Load environment variables
 load_dotenv()
@@ -53,31 +59,119 @@ login_manager.login_view = 'login'
 login_manager.login_message = "Musisz się zalogować, aby uzyskać dostęp do tej strony."
 login_manager.login_message_category = "danger"
 
-# Initialize camera controller
-camera_controller = CameraController()
-logger.info("Camera controller initialized")
+# ============================================================
+# GLOBALNE ZASOBY - Inicjalizacja TYLKO RAZ przy starcie serwera
+# ============================================================
+print("=" * 60)
+print("INFO: Uruchamiam inicjalizację globalnych zasobów...")
+print("=" * 60)
 
-# Load ROI zones and assigned camera from database on startup
+# 1. YOLO Model dla detekcji telefonów
+print("INFO: Ładowanie modelu YOLO dla detekcji telefonów...")
+try:
+    GLOBAL_YOLO_MODEL_DETECTION = YOLO('yolov8s.pt')
+    logger.info("✅ YOLO model (detection) loaded successfully")
+except Exception as e:
+    logger.error(f"❌ Error loading YOLO model (detection): {e}")
+    GLOBAL_YOLO_MODEL_DETECTION = None
+
+# 2. YOLO Model dla anonimizacji (lżejszy)
+print("INFO: Ładowanie modelu YOLO dla anonimizacji...")
+try:
+    GLOBAL_YOLO_MODEL_ANONYMIZATION = YOLO('yolov8n.pt')
+    logger.info("✅ YOLO model (anonymization) loaded successfully")
+except Exception as e:
+    logger.error(f"❌ Error loading YOLO model (anonymization): {e}")
+    GLOBAL_YOLO_MODEL_ANONYMIZATION = None
+
+# 3. Vonage Client (SMS)
+print("INFO: Inicjalizacja klienta Vonage...")
+GLOBAL_VONAGE_SMS = None
+try:
+    vonage_api_key = os.getenv('VONAGE_API_KEY')
+    vonage_api_secret = os.getenv('VONAGE_API_SECRET')
+    vonage_from_number = os.getenv('VONAGE_FROM_NUMBER', 'PhoneDetection')
+    vonage_to_number = os.getenv('VONAGE_TO_NUMBER')
+    
+    if all([vonage_api_key, vonage_api_secret, vonage_to_number]):
+        vonage_auth = Auth(api_key=vonage_api_key, api_secret=vonage_api_secret)
+        vonage_http_client = HttpClient(vonage_auth)
+        GLOBAL_VONAGE_SMS = Sms(vonage_http_client)
+        logger.info("✅ Vonage client initialized")
+    else:
+        logger.warning("⚠️  Brak danych Vonage w zmiennych środowiskowych")
+except Exception as e:
+    logger.error(f"❌ Error initializing Vonage: {e}")
+
+# 4. Cloudinary
+print("INFO: Inicjalizacja Cloudinary...")
+GLOBAL_CLOUDINARY_ENABLED = False
+try:
+    cloudinary_cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME')
+    cloudinary_api_key = os.getenv('CLOUDINARY_API_KEY')
+    cloudinary_api_secret = os.getenv('CLOUDINARY_API_SECRET')
+    
+    if all([cloudinary_cloud_name, cloudinary_api_key, cloudinary_api_secret]):
+        cloudinary.config(
+            cloud_name=cloudinary_cloud_name,
+            api_key=cloudinary_api_key,
+            api_secret=cloudinary_api_secret,
+            secure=True
+        )
+        GLOBAL_CLOUDINARY_ENABLED = True
+        logger.info(f"✅ Cloudinary initialized (Cloud Name: {cloudinary_cloud_name})")
+    else:
+        logger.warning("⚠️  Brak danych Cloudinary w zmiennych środowiskowych")
+except Exception as e:
+    logger.error(f"❌ Error initializing Cloudinary: {e}")
+
+# 5. Email credentials (yagmail - połączenie tworzone przy wysyłce)
+print("INFO: Pobieranie danych Email...")
+GLOBAL_EMAIL_USER = os.environ.get("GMAIL_USER")
+GLOBAL_EMAIL_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+GLOBAL_EMAIL_RECIPIENT = os.environ.get("EMAIL_RECIPIENT")
+if all([GLOBAL_EMAIL_USER, GLOBAL_EMAIL_PASSWORD, GLOBAL_EMAIL_RECIPIENT]):
+    logger.info(f"✅ Email credentials loaded (from: {GLOBAL_EMAIL_USER})")
+else:
+    logger.warning("⚠️  Brak danych Email w zmiennych środowiskowych")
+
+# 6. Skanowanie kamer (TYLKO RAZ)
+print("INFO: Uruchamiam jednorazowe skanowanie kamer...")
+try:
+    # Użyj statycznej metody do skanowania (przed utworzeniem kontrolera)
+    GLOBAL_CAMERA_LIST = CameraController._scan_available_cameras_static()
+    logger.info(f"✅ Camera scan completed: Found {len(GLOBAL_CAMERA_LIST)} cameras")
+except Exception as e:
+    logger.error(f"❌ Error scanning cameras: {e}")
+    GLOBAL_CAMERA_LIST = []
+
+print("=" * 60)
+print("INFO: Inicjalizacja globalnych zasobów zakończona.")
+print("=" * 60)
+
+# Initialize camera controller z przekazanymi zasobami
+camera_controller = CameraController(
+    yolo_model_detection=GLOBAL_YOLO_MODEL_DETECTION,
+    yolo_model_anonymization=GLOBAL_YOLO_MODEL_ANONYMIZATION,
+    vonage_sms=GLOBAL_VONAGE_SMS,
+    cloudinary_enabled=GLOBAL_CLOUDINARY_ENABLED,
+    email_user=GLOBAL_EMAIL_USER,
+    email_password=GLOBAL_EMAIL_PASSWORD,
+    email_recipient=GLOBAL_EMAIL_RECIPIENT,
+    available_cameras_list=GLOBAL_CAMERA_LIST
+)
+logger.info("Camera controller initialized with global resources")
+
+# Load settings from database and push to camera controller on startup
 with app.app_context():
     try:
+        # Wczytaj ustawienia RAZ z bazy
         settings = Settings.get_or_create_default()
-        if settings.roi_zones:
-            camera_controller.update_roi_zones(settings.roi_zones)
-            logger.info(f"Loaded {len(settings.roi_zones)} ROI zones on startup")
-        # Ustaw przypisaną kamerę
-        camera_index = camera_controller.settings.get('camera_index', 0)
-        camera_controller.set_assigned_camera(camera_index)
-        logger.info(f"Assigned camera index: {camera_index}")
+        # PRZEKAŻ (push) ustawienia do kontrolera
+        camera_controller.update_settings(settings)
+        logger.info(f"Loaded settings from database: {len(settings.roi_zones) if settings.roi_zones else 0} ROI zones, schedule configured")
     except Exception as e:
         logger.error(f"Error loading settings on startup: {e}")
-
-# Initialize YOLO model
-try:
-    model = YOLO('yolov8n.pt')
-    logger.info("YOLO model loaded successfully")
-except Exception as e:
-    logger.error(f"Error loading YOLO model: {e}")
-    model = None
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -475,11 +569,17 @@ def update_settings():
             except Exception:
                 pass
         
-        print(f"Updating camera controller (settings only, no auto-start) with: {camera_settings}")
-        # ✅ Save-only: merge into controller settings without triggering auto-start/stop
-        for key, value in camera_settings.items():
-            camera_controller.settings[key] = value
-        # Do NOT call camera_controller.update_settings or any start/stop here
+        # Zapisz ustawienia do bazy danych
+        settings_db = Settings.get_or_create_default()
+        if 'schedule' in camera_settings:
+            settings_db.schedule = camera_settings['schedule']
+        if 'camera_index' in camera_settings:
+            # camera_index nie jest w modelu Settings, więc zapisz tylko do kontrolera
+            pass
+        db.session.commit()
+        
+        # Przekaż zaktualizowany obiekt 'settings' do kontrolera
+        camera_controller.update_settings(settings_db)
         
         return jsonify({
             'message': 'Settings updated successfully',
@@ -500,6 +600,7 @@ def start_camera():
     """Manually start the camera (ignore schedule)"""
     try:
         print("\n🚀 Manual camera start requested")
+        camera_controller.manual_stop_engaged = False  # Resetuj blokadę manual stop
         camera_controller.start_camera()
         return jsonify({
             'message': 'Camera started successfully',
@@ -518,6 +619,7 @@ def stop_camera():
     """Manually stop the camera"""
     try:
         print("\n🛑 Manual camera stop requested")
+        camera_controller.manual_stop_engaged = True  # Ustaw blokadę manual stop
         camera_controller.stop_camera()
         return jsonify({
             'message': 'Camera stopped successfully',
@@ -820,10 +922,8 @@ def save_roi_zones():
         settings_db.updated_at = datetime.utcnow()
         db.session.commit()
         
-        # Update camera controller settings
-        camera_controller.settings['roi_zones'] = roi_zones
-        # Update ROI zones in controller (for per-zone throttling)
-        camera_controller.update_roi_zones(roi_zones)
+        # Przekaż zaktualizowany obiekt 'settings' do kontrolera
+        camera_controller.update_settings(settings_db)
         
         logger.info(f"Saved {len(roi_zones)} ROI zones to database")
         return jsonify({'message': 'ROI zones saved successfully', 'roi_zones': roi_zones})

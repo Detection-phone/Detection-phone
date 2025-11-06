@@ -31,7 +31,11 @@ import yagmail
 import smtplib
 
 class CameraController:
-    def __init__(self, camera_index=0, camera_name=None):
+    def __init__(self, camera_index=0, camera_name=None, 
+                 yolo_model_detection=None, yolo_model_anonymization=None,
+                 vonage_sms=None, cloudinary_enabled=False,
+                 email_user=None, email_password=None, email_recipient=None,
+                 available_cameras_list=None):
         self.camera = None
         self.is_running = False
         self.thread = None
@@ -60,23 +64,34 @@ class CameraController:
         # Import DEFAULT_SCHEDULE from models
         from models import DEFAULT_SCHEDULE
         
-        self.settings = {
-            # Weekly schedule (replaces camera_start_time and camera_end_time)
-            'schedule': DEFAULT_SCHEDULE.copy(),
-            'blur_faces': True,  # Kontroluje czy AnonymizerWorker działa (offline blur)
-            'confidence_threshold': 0.2,
-            'camera_index': self.camera_index,
-            'camera_name': camera_name if camera_name else 'Camera 1',
-            'sms_notifications': False,  # SMS notifications (Vonage + Cloudinary)
-            'email_notifications': False,  # Email notifications (Yagmail + Cloudinary)
-            'anonymization_percent': 50,
-            # ROI as normalized [x1, y1, x2, y2] or None
-            'roi_coordinates': None
-        }
-        self.detection_queue = Queue()
+        # Przechowuj ustawienia jako bezpośrednie zmienne członkowskie (bezpośrednie źródło prawdy)
+        self.schedule = DEFAULT_SCHEDULE.copy()  # Harmonogram tygodniowy
+        self.assigned_camera_index = self.camera_index
+        self.camera_name = camera_name if camera_name else 'Camera 1'
+        self.blur_faces = True  # Kontroluje czy AnonymizerWorker działa (offline blur)
+        self.confidence_threshold = 0.2
+        self.sms_notifications = False  # SMS notifications (Vonage + Cloudinary)
+        self.email_notifications = False  # Email notifications (Yagmail + Cloudinary)
+        self.anonymization_percent = 50
+        self.roi_coordinates = None  # ROI as normalized [x1, y1, x2, y2] or None
         
         # ROI zones for per-zone throttling
         self.roi_zones = []  # Lista słowników, np. [{'name': 'ławka 1', 'coords': {'x': 0.1, 'y': 0.1, 'w': 0.2, 'h': 0.2}}]
+        
+        # Zachowaj słownik settings dla kompatybilności z AnonymizerWorker (który używa self.settings)
+        self.settings = {
+            'schedule': self.schedule,
+            'blur_faces': self.blur_faces,
+            'confidence_threshold': self.confidence_threshold,
+            'camera_index': self.assigned_camera_index,
+            'camera_name': self.camera_name,
+            'sms_notifications': self.sms_notifications,
+            'email_notifications': self.email_notifications,
+            'anonymization_percent': self.anonymization_percent,
+            'roi_coordinates': self.roi_coordinates
+        }
+        
+        self.detection_queue = Queue()
         
         # Per-zone throttling infrastructure
         self.alert_mute_until = {}  # Słownik: {'nazwa_strefy': datetime_obiekt}
@@ -84,19 +99,29 @@ class CameraController:
         self.alert_lock = threading.Lock()  # Zabezpieczenie słownika
         
         # Uruchom AnonymizerWorker (offline anonimizacja + SMS notifications)
-        # Przekaż referencję do settings, aby worker miał dostęp do 'sms_notifications'
-        self.anonymizer_worker = AnonymizerWorker(self.detection_queue, self.settings)
+        # Przekaż referencję do settings oraz globalne zasoby
+        self.anonymizer_worker = AnonymizerWorker(
+            detection_queue=self.detection_queue,
+            settings=self.settings,
+            yolo_model=yolo_model_anonymization,
+            vonage_sms=vonage_sms,
+            cloudinary_enabled=cloudinary_enabled,
+            email_user=email_user,
+            email_password=email_password,
+            email_recipient=email_recipient
+        )
         self.anonymizer_worker.start()
         print("✅ AnonymizerWorker uruchomiony w tle")
         # Manual stop guard – when True, scheduler must not auto-start the camera
-        self.manual_stop_engaged = False
+        # PRZY STARCIE SERWERA: Zawsze blokuj auto-start (kamera startuje wyłączona)
+        self.manual_stop_engaged = True  # Domyślnie zablokowane - użytkownik musi ręcznie włączyć
+        self.was_within_schedule = False  # NOWA ZMIENNA do śledzenia stanu z poprzedniej pętli
+        self.camera_was_manually_started = False  # Flaga: czy użytkownik ręcznie włączył kamerę w tej sesji
         
-        # Initialize YOLO model
-        try:
-            print("Loading YOLO model...")
-            self.model = YOLO('yolov8s.pt')
-            print("YOLO model loaded successfully (yolov8s.pt - Small)")
-            
+        # Użyj przekazanego modelu YOLO (lub None jeśli nie przekazano)
+        self.model = yolo_model_detection
+        if self.model is not None:
+            print("✅ Używam przekazanego modelu YOLO (detection)")
             # Find phone class ID
             self.phone_class_id = None
             for class_id, class_name in self.model.names.items():
@@ -108,9 +133,9 @@ class CameraController:
             if self.phone_class_id is None:
                 self.phone_class_id = 67  # Default COCO class ID for cell phone
                 print(f"Using default phone class ID: {self.phone_class_id}")
-        except Exception as e:
-            print(f"Error loading YOLO model: {e}")
-            self.model = None
+        else:
+            print("⚠️  Brak modelu YOLO (detection) - detekcja telefonów będzie wyłączona")
+            self.phone_class_id = 67
 
         # Frame skipping configuration for performance optimization
         self.frame_counter = 0
@@ -118,12 +143,21 @@ class CameraController:
         self.process_every_n_frame = 10
         print(f"Frame skipping enabled: processing every {self.process_every_n_frame} frames")
         
-        # NOWA LOGIKA: Skanuj kamery tylko raz przy starcie
-        print("INFO: Uruchamiam jednorazowe skanowanie kamer...")
-        self.available_cameras_list = self._scan_available_cameras_internal()
-        print(f"INFO: Skanowanie zakończone. Znaleziono {len(self.available_cameras_list)} kamer.")
+        # Użyj przekazanej listy kamer (lub pusta lista jeśli nie przekazano)
+        if available_cameras_list is not None:
+            self.available_cameras_list = available_cameras_list
+            print(f"INFO: Używam przekazanej listy kamer: {len(self.available_cameras_list)} kamer.")
+        else:
+            self.available_cameras_list = []
+            print("INFO: Brak przekazanej listy kamer - używam pustej listy.")
 
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        
+        # Uruchom główną pętlę kontrolera (która zarządza harmonogramem)
+        self.camera_thread = threading.Thread(target=self._camera_loop)
+        self.camera_thread.daemon = True
+        self.camera_thread.start()
+        print("INFO: Główna pętla kontrolera (_camera_loop) uruchomiona")
 
     def _open_capture(self, index):
         """Open a cv2.VideoCapture STRICTLY for the selected index.
@@ -218,68 +252,92 @@ class CameraController:
         except Exception as e:
             print(f"Error verifying camera: {e}")
 
-    def update_settings(self, settings):
-        """Update camera settings and handle camera state"""
-        print("\nUpdating camera settings...")
-        print(f"Current settings: {self.settings}")
-        print(f"New settings: {settings}")
+    def update_settings(self, settings_model):
+        """
+        Przyjmuje obiekt modelu 'Settings' z app.py i aktualizuje
+        wewnętrzny stan kontrolera. TO JEST JEDYNE ŹRÓDŁO PRAWDY.
+        """
+        print("INFO: Kontroler kamery otrzymał nowe ustawienia.")
         
-        # Check if camera index changed
-        if 'camera_index' in settings and settings['camera_index'] != self.settings['camera_index']:
-            print(f"Camera index changed from {self.settings['camera_index']} to {settings['camera_index']}")
-            self.camera_index = settings['camera_index']
-            self._verify_camera()
+        # Aktualizuj harmonogram
+        if hasattr(settings_model, 'schedule') and settings_model.schedule:
+            self.schedule = settings_model.schedule.copy()
+            print(f"INFO: Zaktualizowano harmonogram: {list(self.schedule.keys())}")
         
+        # Aktualizuj ROI zones
+        if hasattr(settings_model, 'roi_zones') and settings_model.roi_zones is not None:
+            self.roi_zones = settings_model.roi_zones.copy() if isinstance(settings_model.roi_zones, list) else []
+            print(f"INFO: Zaktualizowano ROI zones: {len(self.roi_zones)} stref")
+        
+        # Aktualizuj camera_index (jeśli jest w modelu)
+        if hasattr(settings_model, 'camera_index') and settings_model.camera_index is not None:
+            self.assigned_camera_index = int(settings_model.camera_index)
+            print(f"INFO: Zaktualizowano przypisany indeks kamery: {self.assigned_camera_index}")
+        
+        # Zaktualizuj słownik settings dla kompatybilności z AnonymizerWorker
+        self.settings.update({
+            'schedule': self.schedule,
+            'camera_index': self.assigned_camera_index,
+        })
+        
+        print(f"INFO: Aktualizacja ustawień zakończona.")
+    
+    def update_settings_dict(self, settings):
+        """Update camera settings from dict (legacy method, kept for compatibility)"""
+        print("\nUpdating camera settings from dict (legacy)...")
+        # Merge new settings into existing settings
         # Chroń camera_name przed nadpisaniem na None
         new_camera_name = settings.get('camera_name')
         
         if new_camera_name:
-            # Jeśli jest nowa nazwa, użyj jej
-            self.settings['camera_name'] = new_camera_name
-        elif 'camera_name' not in self.settings:
-            # Jeśli nie ma nowej i nie ma starej, ustaw domyślną
-            self.settings['camera_name'] = 'Camera 1'
-        # Jeśli nie ma nowej, ale jest stara, NIE RÓB NIC (zostaw starą)
+            self.camera_name = new_camera_name
         
-        # Zaktualizuj resztę ustawień, pomijając camera_name (już obsłużone)
-        settings_to_update = {k: v for k, v in settings.items() if k != 'camera_name'}
-        self.settings.update(settings_to_update)
+        # Aktualizuj pozostałe ustawienia
+        if 'schedule' in settings:
+            self.schedule = settings['schedule'].copy()
+        if 'blur_faces' in settings:
+            self.blur_faces = settings['blur_faces']
+        if 'confidence_threshold' in settings:
+            self.confidence_threshold = settings['confidence_threshold']
+        if 'camera_index' in settings:
+            self.assigned_camera_index = int(settings['camera_index'])
+        if 'sms_notifications' in settings:
+            self.sms_notifications = settings['sms_notifications']
+        if 'email_notifications' in settings:
+            self.email_notifications = settings['email_notifications']
+        if 'anonymization_percent' in settings:
+            self.anonymization_percent = settings['anonymization_percent']
+        if 'roi_coordinates' in settings:
+            self.roi_coordinates = settings['roi_coordinates']
+        
+        # Zaktualizuj słownik settings dla kompatybilności
+        self.settings.update({
+            'schedule': self.schedule,
+            'blur_faces': self.blur_faces,
+            'confidence_threshold': self.confidence_threshold,
+            'camera_index': self.assigned_camera_index,
+            'camera_name': self.camera_name,
+            'sms_notifications': self.sms_notifications,
+            'email_notifications': self.email_notifications,
+            'anonymization_percent': self.anonymization_percent,
+            'roi_coordinates': self.roi_coordinates
+        })
         
         print(f"Updated settings: {self.settings}")
-        
-        # Check schedule and update camera state
-        is_within_schedule = self._is_within_schedule()
-        print(f"Within schedule: {is_within_schedule}")
-        print(f"Camera running: {self.is_running}")
-        
-        if is_within_schedule:
-            if not self.is_running:
-                print("Starting camera...")
-                self.start_camera()
-        else:
-            if self.is_running:
-                print("Stopping camera...")
-                self.stop_camera()
-            else:
-                # Start a thread to check for schedule start
-                if not hasattr(self, 'schedule_check_thread') or not self.schedule_check_thread.is_alive():
-                    self.schedule_check_thread = threading.Thread(target=self._check_schedule_start)
-                    self.schedule_check_thread.daemon = True
-                    self.schedule_check_thread.start()
-                    print("Started schedule check thread")
 
     def _is_within_schedule(self):
         """Check if current time is within camera operation schedule (weekly)"""
         try:
+            # WYRZUĆ wszystkie wywołania Settings.query.first() - używaj tylko self.schedule
+            if not self.schedule:
+                return False  # Nie ma harmonogramu
+            
             now = datetime.now()
             current_day = now.strftime('%A').lower()  # e.g., "monday"
             current_time = now.time()
             
-            # Get schedule from settings
-            schedule = self.settings.get('schedule', {})
-            
-            # Get today's schedule config
-            today_schedule = schedule.get(current_day)
+            # Get today's schedule config (używaj bezpośrednio self.schedule)
+            today_schedule = self.schedule.get(current_day)
             
             # Check if enabled
             if not today_schedule or not today_schedule.get('enabled', False):
@@ -338,6 +396,7 @@ class CameraController:
         try:
             # Reset manual stop flag on explicit manual start
             self.manual_stop_engaged = False
+            self.camera_was_manually_started = True  # Oznacz, że użytkownik ręcznie włączył kamerę
             # Użyj przypisanego indeksu kamery (nie skanuj!)
             self.camera_index = self.assigned_camera_index
             print(f"\nInitializing camera with STRICT index {self.camera_index} (assigned camera)...")
@@ -409,12 +468,7 @@ class CameraController:
             
             self.is_running = True
             print(f"Camera started successfully with index {self.camera_index}")
-            
-            # Start camera loop in a separate thread
-            self.camera_thread = threading.Thread(target=self._camera_loop)
-            self.camera_thread.daemon = True
-            self.camera_thread.start()
-            print("Camera thread started")
+            # UWAGA: Nie tworzymy tutaj nowego wątku - _camera_loop już działa od startu (w __init__)
             
         except Exception as e:
             print(f"Error starting camera: {e}")
@@ -423,11 +477,94 @@ class CameraController:
                 self.camera.release()
                 self.camera = None
 
+    def _open_camera_for_loop(self):
+        """Otwiera kamerę bez tworzenia nowego wątku (używane z wewnątrz _camera_loop)."""
+        try:
+            # Użyj przypisanego indeksu kamery
+            self.camera_index = self.assigned_camera_index
+            print(f"Otwieranie kamery o indeksie {self.camera_index}...")
+            
+            self.camera = None
+            last_error = None
+            
+            # Try default backend (MSMF) first, then DSHOW, for the SAME index
+            for backend in ('default', 'dshow'):
+                if backend == 'default':
+                    cap = cv2.VideoCapture(self.camera_index)
+                else:
+                    cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+                
+                if cap is not None and cap.isOpened() and self._capture_has_valid_frame(cap):
+                    self.camera = cap
+                    break
+                
+                # Release and record error
+                if cap is not None:
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                last_error = f"Failed to open camera index {self.camera_index} using backend {backend}"
+            
+            # If still no camera, don't set is_running
+            if self.camera is None or not self.camera.isOpened():
+                if last_error:
+                    print(last_error)
+                print(f"Nie można otworzyć kamery o indeksie {self.assigned_camera_index}")
+                return False
+            
+            # Configure codec and resolution
+            try:
+                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            except Exception:
+                pass
+            
+            # Try preferred resolutions
+            preferred_res = [(1280, 720), (640, 480)]
+            for w, h in preferred_res:
+                try:
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                except Exception:
+                    continue
+                if self._capture_has_valid_frame(self.camera, warmup_reads=5, delay_s=0.05):
+                    break
+            
+            width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = self.camera.get(cv2.CAP_PROP_FPS)
+            print(f"Kamera otwarta pomyślnie: {width}x{height} @ {fps} FPS")
+            
+            self.is_running = True
+            return True
+            
+        except Exception as e:
+            print(f"Błąd podczas otwierania kamery: {e}")
+            self.is_running = False
+            if self.camera is not None:
+                try:
+                    self.camera.release()
+                except:
+                    pass
+                self.camera = None
+            return False
+
+    def _stop_camera_for_loop(self):
+        """Zatrzymuje kamerę bez czekania na wątek (używane z wewnątrz _camera_loop)."""
+        print("Zatrzymywanie kamery...")
+        self.is_running = False
+        if self.camera is not None:
+            try:
+                self.camera.release()
+            except Exception as e:
+                print(f"Błąd podczas zamykania kamery: {e}")
+            self.camera = None
+        print("Kamera zatrzymana.")
+
     def stop_camera(self):
         """Stop the camera and cleanup resources (GUI cleanup in main thread)."""
         print("\nStopping camera...")
-        # Engage manual stop so scheduler won't auto-start within current schedule window
-        self.manual_stop_engaged = True
+        # UWAGA: Ta funkcja NIE ustawia manual_stop_engaged - to robi tylko endpoint API
         self.is_running = False
         
         # Ask the worker thread to finish and wait briefly (non-blocking join)
@@ -468,12 +605,19 @@ class CameraController:
 
     def set_assigned_camera(self, index):
         """Ustawia, który indeks kamery ma być monitorowany."""
-        print(f"Kontroler przypisany do monitorowania kamery o indeksie: {index}")
+        if index == self.assigned_camera_index:
+            # Indeks się nie zmienił, NIE RESTARTUJ kamery.
+            print(f"INFO: Indeks kamery się nie zmienił ({index}), pomijam restart.")
+            return
+        
+        # Indeks się zmienił, zrestartuj
+        print(f"Kontroler przypisany do nowej kamery: {index} (poprzedni: {self.assigned_camera_index})")
         self.assigned_camera_index = index
-        # Opcjonalnie: jeśli kamera jest uruchomiona, zatrzymaj ją (użytkownik będzie musiał uruchomić ponownie)
         if self.is_running:
             print("Kamera jest uruchomiona. Zatrzymywanie, aby zastosować nowy indeks...")
-            self.stop_camera()
+            self.stop_camera()  # To już nie ustawi manual_stop_engaged
+            # Opcjonalnie: można automatycznie uruchomić kamerę z nowym indeksem
+            # self._open_camera_for_loop()
 
     def update_roi_zones(self, new_zones_list):
         """Publiczna metoda do aktualizacji stref ROI z zewnątrz (np. z app.py)."""
@@ -582,13 +726,52 @@ class CameraController:
         print("Starting camera loop...")
         consecutive_failures = 0
         
-        while self.is_running:
+        while True:
             try:
-                # Check if we're still within schedule (weekly check)
-                if not self._is_within_schedule():
-                    print(f"Outside schedule, stopping camera (signal)")
-                    self.is_running = False
-                    break
+                # Sprawdź aktualny stan harmonogramu
+                is_within = self._is_within_schedule()
+                
+                # --- NOWA LOGIKA WYKRYWANIA ZMIAN ---
+                # Sprawdzamy, czy harmonogram WŁAŚNIE SIĘ ZACZĄŁ
+                # (tzn. jest w harmonogramie, a w poprzedniej pętli nie był)
+                # UWAGA: Resetujemy manual_stop_engaged TYLKO jeśli użytkownik wcześniej ręcznie włączył kamerę
+                if is_within and not self.was_within_schedule:
+                    if self.camera_was_manually_started:
+                        print("INFO: Wykryto początek nowego okresu harmonogramu.")
+                        print("INFO: Automatyczne resetowanie flagi 'manual_stop_engaged' (kamera była wcześniej ręcznie włączona).")
+                        self.manual_stop_engaged = False  # Resetuj blokadę tylko jeśli była ręcznie włączona
+                    else:
+                        print("INFO: Wykryto początek harmonogramu, ale kamera nie była ręcznie włączona w tej sesji - pomijam auto-start.")
+                
+                # Zapisz obecny stan na potrzeby następnej pętli
+                self.was_within_schedule = is_within
+                # --- KONIEC NOWEJ LOGIKI ---
+                
+                # Teraz uruchom standardową logikę start/stop
+                if is_within:
+                    # Jesteśmy w harmonogramie. Kamera MUSI działać.
+                    if not self.is_running:
+                        # Sprawdź, czy nie ma blokady manualnej
+                        if self.manual_stop_engaged:
+                            print("INFO: Automatyczne uruchomienie zablokowane przez manual stop.")
+                        else:
+                            # Kamera jest zatrzymana, ale powinna działać. Uruchom ją.
+                            print("INFO: Czas zgodny z harmonogramem. Automatyczne uruchamianie kamery...")
+                            # Otwórz kamerę bezpośrednio (bez tworzenia nowego wątku, bo już jesteśmy w pętli)
+                            self._open_camera_for_loop()
+                else:
+                    # Jesteśmy poza harmonogramem. Kamera MUSI być wyłączona.
+                    if self.is_running:
+                        print("INFO: Czas poza harmonogramem. Automatyczne zatrzymywanie kamery...")
+                        self._stop_camera_for_loop()
+                        # Ważne: Zatrzymanie przez harmonogram resetuje też manual_stop_engaged
+                        self.manual_stop_engaged = False
+                
+                # Jeśli kamera nie jest uruchomiona (bo jest poza harmonogramem lub wystąpił błąd),
+                # śpij i kontynuuj pętlę (nie próbuj czytać klatek).
+                if not self.is_running:
+                    time.sleep(5)  # Sprawdź harmonogram ponownie za 5 sekund
+                    continue
                 
                 # Sprawdzenie, czy kamera jest otwarta
                 if not self.camera or not self.camera.isOpened():
@@ -874,13 +1057,9 @@ class CameraController:
             if hasattr(self, 'anonymizer_worker') and self.anonymizer_worker.model is not None:
                 anonymization_model = self.anonymizer_worker.model
             else:
-                # Fallback: spróbuj załadować model YOLO
-                try:
-                    from ultralytics import YOLO
-                    anonymization_model = YOLO('yolov8n.pt')
-                except Exception as e:
-                    print(f"Could not load anonymization model: {e}")
-                    return frame.copy()  # Zwróć oryginał jeśli nie można załadować modelu
+                # Fallback: jeśli nie ma modelu, zwróć oryginał
+                print("⚠️  Brak modelu anonimizacji - zwracam oryginalną klatkę")
+                return frame.copy()
             
             if anonymization_model is None:
                 return frame.copy()
@@ -999,8 +1178,9 @@ class CameraController:
             print(f"    ⚠️ Exception in _capture_has_valid_frame_static: {e}")
         return False
 
-    def _scan_available_cameras_internal(self):
-        """Wewnętrzna metoda do skanowania kamer - wywoływana tylko raz przy starcie."""
+    @staticmethod
+    def _scan_available_cameras_static():
+        """Statyczna metoda do skanowania kamer - wywoływana tylko raz przy starcie serwera."""
         available_cameras = []
         
         print("\n🔍 Starting camera scan...")
@@ -1272,7 +1452,10 @@ class AnonymizerWorker(threading.Thread):
     Obsługuje również powiadomienia SMS przez Twilio i Google Drive.
     """
     
-    def __init__(self, detection_queue, settings, blur_kernel_size=99, blur_sigma=30, upper_body_ratio=0.50):
+    def __init__(self, detection_queue, settings, 
+                 yolo_model=None, vonage_sms=None, cloudinary_enabled=False,
+                 email_user=None, email_password=None, email_recipient=None,
+                 blur_kernel_size=99, blur_sigma=30, upper_body_ratio=0.50):
         super().__init__(daemon=True)
         self.detection_queue = detection_queue
         self.settings = settings  # Referencja do settings z CameraController
@@ -1285,82 +1468,36 @@ class AnonymizerWorker(threading.Thread):
         self.tasks_processed = 0
         self.persons_anonymized = 0
         
-        # Inicjalizacja YOLOv8 dla detekcji osób
-        print("📷 Inicjalizacja YOLOv8 dla detekcji osób (anonimizacja)...")
-        
-        try:
-            # Załaduj model YOLOv8 (ten sam, który wykrywa telefony)
-            self.model = YOLO('yolov8n.pt')
-            print("✅ YOLOv8 zainicjalizowany dla anonimizacji")
+        # Użyj przekazanych zasobów (NIE inicjalizuj ich tutaj!)
+        self.model = yolo_model
+        if self.model is not None:
+            print("✅ AnonymizerWorker: Używam przekazanego modelu YOLO (anonymization)")
             print(f"   Zamazywanie górnych {int(self.upper_body_ratio * 100)}% ciała osoby")
-        except Exception as e:
-            print(f"❌ Błąd ładowania YOLOv8: {e}")
-            self.model = None
+        else:
+            print("⚠️  AnonymizerWorker: Brak modelu YOLO (anonymization) - anonimizacja będzie wyłączona")
         
-        # Inicjalizacja klienta Vonage (Nexmo) dla SMS
-        print("📱 Inicjalizacja klienta Vonage...")
-        try:
-            self.vonage_api_key = os.getenv('VONAGE_API_KEY')
-            self.vonage_api_secret = os.getenv('VONAGE_API_SECRET')
-            self.vonage_from_number = os.getenv('VONAGE_FROM_NUMBER', 'PhoneDetection')
-            self.vonage_to_number = os.getenv('VONAGE_TO_NUMBER')
-            
-            if all([self.vonage_api_key, self.vonage_api_secret, self.vonage_to_number]):
-                # Vonage v4+ używa Auth → HttpClient → Sms
-                vonage_auth = Auth(api_key=self.vonage_api_key, api_secret=self.vonage_api_secret)
-                vonage_http_client = HttpClient(vonage_auth)
-                self.vonage_sms = Sms(vonage_http_client)
-                print("✅ Klient Vonage zainicjalizowany")
-            else:
-                self.vonage_sms = None
-                print("⚠️  Brak danych Vonage w zmiennych środowiskowych")
-        except Exception as e:
-            print(f"❌ Błąd inicjalizacji Vonage: {e}")
-            self.vonage_sms = None
+        # Użyj przekazanego klienta Vonage
+        self.vonage_sms = vonage_sms
+        if self.vonage_sms is not None:
+            print("✅ AnonymizerWorker: Używam przekazanego klienta Vonage")
+        else:
+            print("⚠️  AnonymizerWorker: Brak klienta Vonage - SMS będzie wyłączone")
         
-        # Inicjalizacja Cloudinary
-        print("☁️  Inicjalizacja Cloudinary...")
-        try:
-            cloudinary_cloud_name = os.getenv('CLOUDINARY_CLOUD_NAME')
-            cloudinary_api_key = os.getenv('CLOUDINARY_API_KEY')
-            cloudinary_api_secret = os.getenv('CLOUDINARY_API_SECRET')
-            
-            if all([cloudinary_cloud_name, cloudinary_api_key, cloudinary_api_secret]):
-                cloudinary.config(
-                    cloud_name=cloudinary_cloud_name,
-                    api_key=cloudinary_api_key,
-                    api_secret=cloudinary_api_secret,
-                    secure=True
-                )
-                self.cloudinary_enabled = True
-                print("✅ Cloudinary zainicjalizowane")
-                print(f"   Cloud Name: {cloudinary_cloud_name}")
-            else:
-                self.cloudinary_enabled = False
-                print("⚠️  Brak danych Cloudinary w zmiennych środowiskowych")
-        except Exception as e:
-            print(f"❌ Błąd inicjalizacji Cloudinary: {e}")
-            self.cloudinary_enabled = False
+        # Użyj przekazanej konfiguracji Cloudinary
+        self.cloudinary_enabled = cloudinary_enabled
+        if self.cloudinary_enabled:
+            print("✅ AnonymizerWorker: Cloudinary jest włączone")
+        else:
+            print("⚠️  AnonymizerWorker: Cloudinary jest wyłączone")
         
-        # Inicjalizacja Email (yagmail) - przechowujemy tylko dane logowania
-        print("📧 Inicjalizacja danych Email (Yagmail)...")
-        try:
-            # Pobierz dane logowania z zmiennych środowiskowych (.env)
-            self.email_user = os.environ.get("GMAIL_USER")
-            self.email_password = os.environ.get("GMAIL_APP_PASSWORD")
-            self.email_recipient = os.environ.get("EMAIL_RECIPIENT")
-            
-            # Sprawdź czy wszystkie dane są dostępne
-            if not all([self.email_user, self.email_password, self.email_recipient]):
-                print("⚠️  Brak danych Email w zmiennych środowiskowych (.env)")
-                print("   Wymagane: GMAIL_USER, GMAIL_APP_PASSWORD, EMAIL_RECIPIENT")
-            else:
-                # NIE tworzymy połączenia tutaj - będzie tworzone przy każdej wysyłce
-                print("✅ Dane Email zainicjalizowane (połączenie będzie tworzone przy wysyłce).")
-                print(f"   Wysyłka z: {self.email_user}")
-                print(f"   Odbiorca: {self.email_recipient}")
-        except Exception as e:
-            print(f"❌ Błąd inicjalizacji danych Email: {e}")
+        # Użyj przekazanych danych Email
+        self.email_user = email_user
+        self.email_password = email_password
+        self.email_recipient = email_recipient
+        if all([self.email_user, self.email_password, self.email_recipient]):
+            print(f"✅ AnonymizerWorker: Dane Email załadowane (from: {self.email_user})")
+        else:
+            print("⚠️  AnonymizerWorker: Brak danych Email - email będzie wyłączony")
     
     def run(self):
         """Główna pętla workera - przetwarza zadania z kolejki"""
@@ -1381,10 +1518,11 @@ class AnonymizerWorker(threading.Thread):
                 
                 filepath = task_data.get('filepath')
                 confidence = task_data.get('confidence', 0.0)
+                zone_name = task_data.get('zone_name')  # Pobierz zone_name z task_data
                 # KLUCZOWE: Odczytaj flagę should_blur (domyślnie True dla bezpieczeństwa)
                 should_blur = task_data.get('should_blur', True)
                 
-                print(f"🔄 Przetwarzanie: {filepath} (blur: {should_blur})")
+                print(f"🔄 Przetwarzanie: {filepath} (blur: {should_blur}, zone: {zone_name})")
                 
                 # Wykonaj anonimizację TYLKO jeśli should_blur = True
                 if should_blur:
