@@ -82,7 +82,6 @@ try:
     # Inicjalizacja Roboflow z kluczem API
     rf = Roboflow(api_key="DAWQI4w1KCHH1MlWH7t4")
     
-    # Próba załadowania modelu (z fallbackiem)
     try:
         GLOBAL_YOLO_MODEL_ANONYMIZATION = rf.model("heads-detection/1")
     except:
