@@ -24,6 +24,7 @@ import cloudinary.api
 from vonage import Auth
 from vonage_sms import Sms
 from vonage_http_client import HttpClient
+from roboflow import Roboflow
 
 # Load environment variables
 load_dotenv()
@@ -75,13 +76,29 @@ except Exception as e:
     logger.error(f"❌ Error loading YOLO model (detection): {e}")
     GLOBAL_YOLO_MODEL_DETECTION = None
 
-# 2. YOLO Model dla anonimizacji (lżejszy)
-print("INFO: Ładowanie modelu YOLO dla anonimizacji...")
+# 2. Roboflow Model dla anonimizacji (head-detection)
+print("INFO: Pobieranie modelu Roboflow (head-detection)...")
 try:
-    GLOBAL_YOLO_MODEL_ANONYMIZATION = YOLO('yolov8n.pt')
-    logger.info("✅ YOLO model (anonymization) loaded successfully")
+    # Inicjalizacja Roboflow z kluczem API
+    rf = Roboflow(api_key="DAWQI4w1KCHH1MlWH7t4")
+    
+    # Próba załadowania modelu (z fallbackiem)
+    try:
+        GLOBAL_YOLO_MODEL_ANONYMIZATION = rf.model("heads-detection/1")
+    except:
+        try:
+            workspace = rf.workspace("heads-detection")
+            project = workspace.project("heads-detection")
+            GLOBAL_YOLO_MODEL_ANONYMIZATION = project.version(1).model
+        except:
+            workspace = rf.workspace()
+            project = workspace.project("heads-detection")
+            GLOBAL_YOLO_MODEL_ANONYMIZATION = project.version(1).model
+    
+    print("INFO:__main__:✅ Roboflow model (anonymization) loaded successfully")
+    logger.info("✅ Roboflow model (anonymization) loaded successfully")
 except Exception as e:
-    logger.error(f"❌ Error loading YOLO model (anonymization): {e}")
+    logger.error(f"❌ Error loading Roboflow model (anonymization): {e}")
     GLOBAL_YOLO_MODEL_ANONYMIZATION = None
 
 # 3. Vonage Client (SMS)
@@ -799,16 +816,16 @@ def video_feed():
 
 def anonymize_frame(frame, anonymization_model, settings):
     """
-    Anonimizuje górną część ciała osób na numpy array (frame).
-    Używa logiki podobnej do AnonymizerWorker._anonymize_faces.
+    Anonimizuje wykryte głowy na numpy array (frame).
+    Używa modelu Roboflow head-detection do wykrywania i zamazywania całej głowy.
     
     Args:
         frame: numpy array (BGR image)
-        anonymization_model: YOLO model instance
-        settings: camera controller settings dict
+        anonymization_model: Roboflow model instance (head-detection)
+        settings: camera controller settings dict (nieużywane, zachowane dla kompatybilności)
         
     Returns:
-        anonymized_frame: numpy array z zanonimizowanymi osobami
+        anonymized_frame: numpy array z zanonimizowanymi głowami
     """
     try:
         if anonymization_model is None:
@@ -819,76 +836,70 @@ def anonymize_frame(frame, anonymization_model, settings):
         anonymized_frame = frame.copy()
         img_h, img_w = anonymized_frame.shape[:2]
         
-        # Wykryj osoby za pomocą YOLO
-        results = anonymization_model(frame, verbose=False)
-        persons_found = 0
+        # Zapisz klatkę tymczasowo (Roboflow wymaga pliku)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+            temp_path = tmp.name
+            cv2.imwrite(temp_path, frame)
         
-        # Parametry blur
-        blur_kernel_size = 99
-        blur_sigma = 30
-        
-        # Przetwórz wyniki
-        for result in results:
-            boxes = result.boxes
-            if boxes is None:
-                continue
-            for box in boxes:
-                class_id = int(box.cls[0])
-                confidence = float(box.conf[0])
+        try:
+            # Wykryj głowy za pomocą modelu Roboflow
+            prediction = anonymization_model.predict(temp_path, confidence=40, overlap=30)
+            results = prediction.json()
+            heads_found = 0
+            
+            # Przetwórz wyniki (format Roboflow: x, y = środek; width, height)
+            for det in results.get('predictions', []):
+                confidence = det.get('confidence', 0)
                 
-                # Szukamy tylko klasy 'person' (0 w COCO)
-                if class_id == 0 and confidence >= 0.5:
-                    persons_found += 1
+                # Wykrywamy głowy
+                if confidence >= 0.4:  # 0.4 = 40%
+                    heads_found += 1
                     
-                    # Pobierz pełny bounding box osoby
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    # Pobierz współrzędne (Roboflow: środek + wymiary)
+                    center_x = int(det['x'])
+                    center_y = int(det['y'])
+                    width = int(det['width'])
+                    height = int(det['height'])
                     
-                    # Oblicz wysokość bbox osoby
-                    person_height = y2 - y1
+                    # Konwertuj na (x1, y1, x2, y2)
+                    x1 = center_x - width // 2
+                    y1 = center_y - height // 2
+                    x2 = center_x + width // 2
+                    y2 = center_y + height // 2
                     
-                    # Oblicz górną część ciała (konfigurowalny % od góry)
-                    try:
-                        percent = int(settings.get('anonymization_percent', 50))
-                    except Exception:
-                        percent = 50
-                    ratio = max(0, min(100, percent)) / 100.0
-                    upper_body_height = int(person_height * ratio)
-                    
-                    # Definiuj ROI dla górnej części ciała
-                    roi_x1 = x1
-                    roi_y1 = y1
-                    roi_x2 = x2
-                    roi_y2 = y1 + upper_body_height
-                    
-                    # Walidacja granic obrazu
-                    roi_x1 = max(0, roi_x1)
-                    roi_y1 = max(0, roi_y1)
-                    roi_x2 = min(img_w, roi_x2)
-                    roi_y2 = min(img_h, roi_y2)
+                    # Upewnij się, że współrzędne są w granicach obrazu
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(img_w, x2), min(img_h, y2)
                     
                     # Sprawdź czy ROI ma sens
-                    if roi_x2 <= roi_x1 or roi_y2 <= roi_y1:
+                    if x2 <= x1 or y2 <= y1:
                         continue
                     
-                    # Wytnij ROI górnej części ciała
-                    upper_body_roi = anonymized_frame[roi_y1:roi_y2, roi_x1:roi_x2]
+                    # Wybierz region (całą głowę)
+                    roi = anonymized_frame[y1:y2, x1:x2]
                     
-                    # Zastosuj silny Gaussian blur
-                    if upper_body_roi.size > 0:
-                        blurred_upper_body = cv2.GaussianBlur(
-                            upper_body_roi,
-                            (blur_kernel_size, blur_kernel_size),
-                            blur_sigma
-                        )
-                        anonymized_frame[roi_y1:roi_y2, roi_x1:roi_x2] = blurred_upper_body
+                    # Zastosuj silne rozmycie
+                    if roi.size > 0:
+                        blur = cv2.GaussianBlur(roi, (99, 99), 30)
+                        anonymized_frame[y1:y2, x1:x2] = blur
+            
+            if heads_found > 0:
+                logger.info(f"Anonymized {heads_found} heads in config snapshot")
         
-        if persons_found > 0:
-            logger.info(f"Anonymized {persons_found} persons in config snapshot")
+        finally:
+            # Usuń tymczasowy plik
+            try:
+                os.remove(temp_path)
+            except:
+                pass
         
         return anonymized_frame
         
     except Exception as e:
         logger.error(f"Error anonymizing frame: {e}")
+        import traceback
+        traceback.print_exc()
         return frame.copy()  # Return original on error
 
 @app.route('/api/settings/roi', methods=['GET'])
