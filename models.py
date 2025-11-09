@@ -45,6 +45,15 @@ class Settings(db.Model):
     schedule = db.Column(db.JSON, nullable=False, default=lambda: DEFAULT_SCHEDULE)
     # ROI zones: list of objects with id, name, coords {x, y, w, h} (normalized 0-1)
     roi_zones = db.Column(db.JSON, nullable=False, default=lambda: [])
+    # Additional settings stored as JSON (blur_faces, confidence_threshold, camera_index, etc.)
+    config = db.Column(db.JSON, nullable=False, default=lambda: {
+        'blur_faces': True,
+        'confidence_threshold': 0.2,
+        'camera_index': 0,
+        'camera_name': 'Camera 1',
+        'email_notifications': False,
+        'sms_notifications': False
+    })
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     

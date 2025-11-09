@@ -8,7 +8,17 @@ def init_db():
         # Create default settings if they don't exist
         settings = Settings.query.first()
         if not settings:
-            settings = Settings(schedule=DEFAULT_SCHEDULE)
+            settings = Settings(
+                schedule=DEFAULT_SCHEDULE,
+                config={
+                    'blur_faces': True,
+                    'confidence_threshold': 0.2,
+                    'camera_index': 0,
+                    'camera_name': 'Camera 1',
+                    'email_notifications': False,
+                    'sms_notifications': False
+                }
+            )
             db.session.add(settings)
             db.session.commit()
             print("✅ Default settings created successfully!")

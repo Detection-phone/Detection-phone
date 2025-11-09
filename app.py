@@ -183,9 +183,19 @@ with app.app_context():
     try:
         # Wczytaj ustawienia RAZ z bazy
         settings = Settings.get_or_create_default()
+        
+        # Dodaj atrybuty z config do obiektu settings (dla kompatybilności)
+        config = settings.config if settings.config else {}
+        settings.blur_faces = config.get('blur_faces', True)
+        settings.confidence_threshold = config.get('confidence_threshold', 0.2)
+        settings.camera_index = config.get('camera_index', 0)
+        settings.camera_name = config.get('camera_name', 'Camera 1')
+        settings.email_notifications = config.get('email_notifications', False)
+        settings.sms_notifications = config.get('sms_notifications', False)
+        
         # PRZEKAŻ (push) ustawienia do kontrolera
         camera_controller.update_settings(settings)
-        logger.info(f"Loaded settings from database: {len(settings.roi_zones) if settings.roi_zones else 0} ROI zones, schedule configured")
+        logger.info(f"Loaded settings from database: blur_faces={settings.blur_faces}, {len(settings.roi_zones) if settings.roi_zones else 0} ROI zones, schedule configured")
     except Exception as e:
         logger.error(f"Error loading settings on startup: {e}")
 
@@ -493,26 +503,38 @@ def get_settings():
             }
         ]
     
-    # Get schedule from controller settings (or default)
-    schedule = camera_controller.settings.get('schedule', DEFAULT_SCHEDULE.copy())
+    # Get settings from database
+    settings_db = Settings.get_or_create_default()
+    
+    # Get schedule from database
+    schedule = settings_db.schedule if settings_db.schedule else DEFAULT_SCHEDULE.copy()
     
     # Get ROI zones from database
-    settings_db = Settings.get_or_create_default()
     roi_zones = settings_db.roi_zones if settings_db.roi_zones else []
+    
+    # Get config from database (with defaults)
+    config = settings_db.config if settings_db.config else {
+        'blur_faces': True,
+        'confidence_threshold': 0.2,
+        'camera_index': 0,
+        'camera_name': 'Camera 1',
+        'email_notifications': False,
+        'sms_notifications': False
+    }
     
     return jsonify({
         'schedule': schedule,  # Weekly schedule JSON
-        'blur_faces': camera_controller.settings['blur_faces'],
-        'confidence_threshold': camera_controller.settings['confidence_threshold'],
-        'camera_index': camera_controller.settings['camera_index'],
-        'camera_name': camera_controller.settings['camera_name'],
-        'anonymization_percent': camera_controller.settings.get('anonymization_percent', 50),
-        'roi_coordinates': camera_controller.settings.get('roi_coordinates'),
+        'blur_faces': config.get('blur_faces', True),
+        'confidence_threshold': config.get('confidence_threshold', 0.2),
+        'camera_index': config.get('camera_index', 0),
+        'camera_name': config.get('camera_name', 'Camera 1'),
+        'anonymization_percent': config.get('anonymization_percent', 50),
+        'roi_coordinates': config.get('roi_coordinates'),
         'roi_zones': roi_zones,  # ROI zones from database
         'available_cameras': available_cameras,  # Always a list (empty if error)
         'notifications': {
-            'email': camera_controller.settings.get('email_notifications', False),
-            'sms': camera_controller.settings.get('sms_notifications', False)
+            'email': config.get('email_notifications', False),
+            'sms': config.get('sms_notifications', False)
         }
     })
 
@@ -587,26 +609,57 @@ def update_settings():
         
         # Zapisz ustawienia do bazy danych
         settings_db = Settings.get_or_create_default()
+        
+        # Aktualizuj schedule jeśli podany
         if 'schedule' in camera_settings:
             settings_db.schedule = camera_settings['schedule']
+        
+        # Pobierz obecny config lub utwórz nowy
+        config = settings_db.config if settings_db.config else {}
+        
+        # Aktualizuj config z nowymi wartościami
+        if 'blur_faces' in camera_settings:
+            config['blur_faces'] = camera_settings['blur_faces']
+            print(f"🔧 DEBUG: Zapisuję do DB config['blur_faces'] = {camera_settings['blur_faces']}")
+        if 'confidence_threshold' in camera_settings:
+            config['confidence_threshold'] = camera_settings['confidence_threshold']
+            print(f"🔧 DEBUG: Zapisuję do DB config['confidence_threshold'] = {camera_settings['confidence_threshold']}")
         if 'camera_index' in camera_settings:
-            # camera_index nie jest w modelu Settings, więc zapisz tylko do kontrolera
-            pass
+            config['camera_index'] = camera_settings['camera_index']
+        if 'camera_name' in camera_settings:
+            config['camera_name'] = camera_settings['camera_name']
+        if 'email_notifications' in camera_settings:
+            config['email_notifications'] = camera_settings['email_notifications']
+            print(f"🔧 DEBUG: Zapisuję do DB config['email_notifications'] = {camera_settings['email_notifications']}")
+        if 'sms_notifications' in camera_settings:
+            config['sms_notifications'] = camera_settings['sms_notifications']
+            print(f"🔧 DEBUG: Zapisuję do DB config['sms_notifications'] = {camera_settings['sms_notifications']}")
+        if 'anonymization_percent' in camera_settings:
+            config['anonymization_percent'] = camera_settings['anonymization_percent']
+        if 'roi_coordinates' in camera_settings:
+            config['roi_coordinates'] = camera_settings['roi_coordinates']
+        
+        # Zapisz zaktualizowany config do bazy
+        settings_db.config = config
+        settings_db.updated_at = datetime.utcnow()
         db.session.commit()
         
-        # Dodaj ustawienia powiadomień do obiektu settings_db (dla kompatybilności)
-        # Model Settings nie ma tych pól w bazie, ale możemy je dodać jako atrybuty obiektu
-        if 'email_notifications' in camera_settings:
-            settings_db.email_notifications = camera_settings['email_notifications']
-            print(f"🔧 DEBUG: Ustawiono settings_db.email_notifications = {camera_settings['email_notifications']}")
-        if 'sms_notifications' in camera_settings:
-            settings_db.sms_notifications = camera_settings['sms_notifications']
-            print(f"🔧 DEBUG: Ustawiono settings_db.sms_notifications = {camera_settings['sms_notifications']}")
-        if 'camera_name' in camera_settings:
-            settings_db.camera_name = camera_settings['camera_name']
+        print(f"✅ Zapisano ustawienia do bazy danych (config): {config}")
+        
+        # Dodaj ustawienia jako atrybuty obiektu (dla kompatybilności z update_settings)
+        settings_db.blur_faces = config.get('blur_faces', True)
+        settings_db.confidence_threshold = config.get('confidence_threshold', 0.2)
+        settings_db.email_notifications = config.get('email_notifications', False)
+        settings_db.sms_notifications = config.get('sms_notifications', False)
+        settings_db.camera_name = config.get('camera_name', 'Camera 1')
+        settings_db.camera_index = config.get('camera_index', 0)
         
         # DEBUG: Sprawdź wartości przed przekazaniem
-        print(f"🔧 DEBUG: Przed update_settings - email_notifications: {getattr(settings_db, 'email_notifications', 'BRAK')}, sms_notifications: {getattr(settings_db, 'sms_notifications', 'BRAK')}")
+        print(f"🔧 DEBUG: Przed update_settings:")
+        print(f"  - blur_faces: {getattr(settings_db, 'blur_faces', 'BRAK')}")
+        print(f"  - confidence_threshold: {getattr(settings_db, 'confidence_threshold', 'BRAK')}")
+        print(f"  - email_notifications: {getattr(settings_db, 'email_notifications', 'BRAK')}")
+        print(f"  - sms_notifications: {getattr(settings_db, 'sms_notifications', 'BRAK')}")
         
         # Przekaż zaktualizowany obiekt 'settings' do kontrolera
         camera_controller.update_settings(settings_db)

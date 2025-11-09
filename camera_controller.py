@@ -277,6 +277,16 @@ class CameraController:
             self.assigned_camera_index = int(settings_model.camera_index)
             print(f"INFO: Zaktualizowano przypisany indeks kamery: {self.assigned_camera_index}")
         
+        # Aktualizuj blur_faces (KRYTYCZNE!)
+        if hasattr(settings_model, 'blur_faces'):
+            self.blur_faces = bool(settings_model.blur_faces)
+            print(f"INFO: Zaktualizowano blur_faces: {self.blur_faces}")
+        
+        # Aktualizuj confidence_threshold
+        if hasattr(settings_model, 'confidence_threshold'):
+            self.confidence_threshold = float(settings_model.confidence_threshold)
+            print(f"INFO: Zaktualizowano confidence_threshold: {self.confidence_threshold}")
+        
         # --- AKTUALIZUJ WEWNĘTRZNE ZMIENNE POWIADOMIEŃ ---
         # DEBUG: Sprawdź co otrzymaliśmy
         print(f"🔧 DEBUG: update_settings otrzymał settings_model typu: {type(settings_model)}")
@@ -327,6 +337,8 @@ class CameraController:
         # Zaktualizuj słownik settings dla kompatybilności z AnonymizerWorker
         self.settings['email_notifications'] = self.email_enabled
         self.settings['sms_notifications'] = self.sms_enabled
+        self.settings['blur_faces'] = self.blur_faces  # KRYTYCZNE: Zaktualizuj słownik!
+        self.settings['confidence_threshold'] = self.confidence_threshold
         if hasattr(settings_model, 'camera_name'):
             self.settings['camera_name'] = settings_model.camera_name
         
@@ -339,7 +351,11 @@ class CameraController:
         if hasattr(self, 'anonymizer_worker') and self.anonymizer_worker is not None:
             self.anonymizer_worker.update_worker_settings(self)
         
-        print(f"INFO: Aktualizacja ustawień zakończona (przekazano do workera: email={self.email_enabled}, sms={self.sms_enabled}).")
+        print(f"INFO: Aktualizacja ustawień zakończona:")
+        print(f"  - blur_faces: {self.blur_faces}")
+        print(f"  - confidence_threshold: {self.confidence_threshold}")
+        print(f"  - email_notifications: {self.email_enabled}")
+        print(f"  - sms_notifications: {self.sms_enabled}")
     
     def update_settings_dict(self, settings):
         """Update camera settings from dict (legacy method, kept for compatibility)"""
@@ -767,6 +783,7 @@ class CameraController:
             # KLUCZOWE: Zamroź konfigurację blur w momencie detekcji
             # Ta wartość zostanie przekazana do workera razem z zadaniem
             should_blur = self.settings.get('blur_faces', True)
+            print(f"🔧 DEBUG _handle_detection: blur_faces={self.blur_faces}, should_blur={should_blur}, self.settings['blur_faces']={self.settings.get('blur_faces', 'BRAK')}")
             
             # Dodaj do kolejki dla AnonymizerWorker
             # Worker zamaże twarze (jeśli should_blur=True) i zapisze do DB
