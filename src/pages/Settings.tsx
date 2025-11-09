@@ -1846,29 +1846,11 @@ const Settings: React.FC = () => {
                   Enable anonymization (blur)
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Automatically blur detected people to protect privacy
+                  Automatically detect and blur heads to protect privacy
                 </Typography>
               </Box>
             }
-            sx={{ mb: 2 }}
           />
-          <FormControl fullWidth sx={{ opacity: settings.blurFaces ? 1 : 0.5 }}>
-            <FormLabel>Anonymization Area</FormLabel>
-            <Slider
-              disabled={!settings.blurFaces}
-              value={settings.anonymizationPercent}
-              onChange={(_e, value) => setSettings({ ...settings, anonymizationPercent: value as number })}
-              min={10}
-              max={100}
-              step={5}
-              valueLabelDisplay="auto"
-              valueLabelFormat={(v) => `${v}%`}
-              sx={{ mt: 1 }}
-            />
-            <FormHelperText>
-              Ustaw, jak duża górna część sylwetki ma zostać rozmyta.
-            </FormHelperText>
-          </FormControl>
         </AccordionDetails>
       </Accordion>
 

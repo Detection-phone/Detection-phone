@@ -751,9 +751,16 @@ class CameraController:
             filename = f'phone_{timestamp}.jpg'
             filepath = os.path.join('detections', filename)
             
-            success = cv2.imwrite(filepath, frame)
-            if not success:
-                raise Exception("Failed to save detection image")
+            # Walidacja klatki przed zapisem
+            if frame is None or frame.size == 0:
+                raise Exception("Invalid frame: None or empty")
+            
+            try:
+                success = cv2.imwrite(filepath, frame)
+                if not success:
+                    raise Exception("Failed to save detection image")
+            except cv2.error as cv_err:
+                raise Exception(f"OpenCV error during imwrite: {cv_err}")
             
             print(f"💾 Zapisano ORYGINALNĄ klatkę: {filepath}")
             
@@ -784,6 +791,7 @@ class CameraController:
         """Main camera loop for capturing and processing frames"""
         print("Starting camera loop...")
         consecutive_failures = 0
+        opencv_error_count = 0  # Licznik błędów OpenCV
         
         while True:
             try:
@@ -902,9 +910,24 @@ class CameraController:
                 
                 # Dopiero teraz klatka jest bezpieczna - ustawiamy last_frame PRZED wszystkimi innymi operacjami
                 consecutive_failures = 0
+                opencv_error_count = 0  # Reset licznika błędów OpenCV po udanym odczycie
+                
+                # Dodatkowa walidacja przed .copy() - sprawdź czy klatka jest ciągła w pamięci
+                try:
+                    if not frame.data.contiguous:
+                        print("Ostrzeżenie: Klatka nie jest ciągła w pamięci. Tworzenie kopii...")
+                        frame = np.ascontiguousarray(frame)
+                except Exception:
+                    pass  # Jeśli nie możemy sprawdzić, kontynuuj normalnie
+                
                 try:
                     with self.frame_lock:
                         self.last_frame = frame.copy()
+                except cv2.error as e:
+                    print(f"Błąd OpenCV podczas kopiowania klatki: {e}")
+                    opencv_error_count += 1
+                    time.sleep(0.1)
+                    continue
                 except Exception as e:
                     print(f"Error copying frame to last_frame: {e}")
                     time.sleep(0.1)
@@ -929,6 +952,11 @@ class CameraController:
                 # Wyświetlamy ORYGINALNĄ klatkę bez zamazania
                 try:
                     display_frame = frame.copy()
+                except cv2.error as e:
+                    print(f"Błąd OpenCV podczas kopiowania display_frame: {e}")
+                    opencv_error_count += 1
+                    time.sleep(0.1)
+                    continue
                 except Exception as e:
                     print(f"Error copying frame for display: {e}")
                     time.sleep(0.1)
@@ -976,7 +1004,14 @@ class CameraController:
                                     
                                     if matched_zone:
                                         # Mamy trafienie w strefę! Uruchom logikę throttlingu
-                                        self.trigger_throttled_notification(matched_zone, frame.copy(), confidence)
+                                        try:
+                                            frame_copy = frame.copy()
+                                            self.trigger_throttled_notification(matched_zone, frame_copy, confidence)
+                                        except cv2.error as copy_err:
+                                            print(f"Błąd OpenCV podczas kopiowania klatki dla detekcji: {copy_err}")
+                                            opencv_error_count += 1
+                                        except Exception as copy_err:
+                                            print(f"Błąd podczas kopiowania klatki dla detekcji: {copy_err}")
                                     elif len(self.roi_zones) > 0:
                                         # Są zdefiniowane strefy, ale telefon nie trafił w żadną - pomijamy
                                         continue
@@ -997,7 +1032,14 @@ class CameraController:
                                             continue
                                         
                                         # Użyj starej metody _handle_detection bez strefy
-                                        self._handle_detection(frame.copy(), confidence, None)
+                                        try:
+                                            frame_copy = frame.copy()
+                                            self._handle_detection(frame_copy, confidence, None)
+                                        except cv2.error as copy_err:
+                                            print(f"Błąd OpenCV podczas kopiowania klatki dla legacy detekcji: {copy_err}")
+                                            opencv_error_count += 1
+                                        except Exception as copy_err:
+                                            print(f"Błąd podczas kopiowania klatki dla legacy detekcji: {copy_err}")
 
                                     # Rysuj bounding box na wyświetlanej klatce
                                     x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -1056,9 +1098,33 @@ class CameraController:
                 
             except cv2.error as e:
                 # Specjalna obsługa błędów OpenCV (np. cv::Mat::Mat)
+                opencv_error_count += 1
                 print(f"BŁĄD KRYTYCZNY OpenCV (cv::Mat::Mat?) w pętli kamery: {e}")
-                print("Pominięcie klatki i kontynuacja...")
-                time.sleep(0.5)  # Dłuższa pauza
+                print(f"Liczba błędów OpenCV: {opencv_error_count}/10")
+                
+                # Po 10 błędach OpenCV, zrestartuj kamerę
+                if opencv_error_count >= 10:
+                    print("⚠️ Zbyt wiele błędów OpenCV. Restart kamery...")
+                    opencv_error_count = 0
+                    try:
+                        if self.camera is not None:
+                            self.camera.release()
+                        time.sleep(2)  # Poczekaj przed ponownym otwarciem
+                        self.camera = self._open_capture(self.assigned_camera_index)
+                        if self.camera is None or not self.camera.isOpened():
+                            print("BŁĄD: Ponowne otwarcie kamery po błędach OpenCV nie powiodło się.")
+                            time.sleep(5)
+                        else:
+                            # Reset properties
+                            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                            print("✅ Kamera zrestartowana pomyślnie po błędach OpenCV")
+                    except Exception as restart_err:
+                        print(f"BŁĄD podczas restartu kamery: {restart_err}")
+                        time.sleep(5)
+                else:
+                    print("Pominięcie klatki i kontynuacja...")
+                    time.sleep(0.5)  # Dłuższa pauza
                 continue
             except Exception as e:
                 # Łapanie wszystkich innych błędów
