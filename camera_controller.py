@@ -142,8 +142,8 @@ class CameraController:
 
         # Frame skipping configuration for performance optimization
         self.frame_counter = 0
-        # Będziemy analizować co 10. klatkę (dla 30 FPS = 3 detekcje na sekundę)
-        self.process_every_n_frame = 10
+        # Będziemy analizować co 5. klatkę (dla 30 FPS = 6 detekcji na sekundę)
+        self.process_every_n_frame = 5
         print(f"Frame skipping enabled: processing every {self.process_every_n_frame} frames")
         
         # Użyj przekazanej listy kamer (lub pusta lista jeśli nie przekazano)
@@ -966,13 +966,13 @@ class CameraController:
                 self.frame_counter += 1
                 
                 # --- KLUCZOWA LOGIKA POMIJANIA KLATEK ---
-                # Jeśli to nie jest co 10. klatka, przeskocz do następnej iteracji
-                # To pozwala na płynne działanie streamu, a detekcję wykonujemy tylko co 10. klatkę
+                # Jeśli to nie jest co 5. klatka, przeskocz do następnej iteracji
+                # To pozwala na płynne działanie streamu, a detekcję wykonujemy tylko co 5. klatkę
                 if self.frame_counter % self.process_every_n_frame != 0:
                     continue  # Pomiń detekcję dla tej klatki, ale stream działa normalnie
                 
-                # --- TEN KOD WYKONA SIĘ TERAZ TYLKO CO 10. KLATKĘ ---
-                # (Zakładając 30 FPS = 3 detekcje na sekundę)
+                # --- TEN KOD WYKONA SIĘ TERAZ TYLKO CO 5. KLATKĘ ---
+                # (Zakładając 30 FPS = 6 detekcji na sekundę)
                 if self.model is not None:
                     try:
                         # Validate display_frame exists and is valid before using
