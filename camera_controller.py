@@ -1196,14 +1196,19 @@ class CameraController:
         try:
             # Użyj modelu z AnonymizerWorker jeśli dostępny
             anonymization_model = None
-            if hasattr(self, 'anonymizer_worker') and self.anonymizer_worker.model is not None:
-                anonymization_model = self.anonymizer_worker.model
+            if hasattr(self, 'anonymizer_worker'):
+                print(f"🔧 DEBUG anonymize_frame_logic: anonymizer_worker istnieje")
+                if self.anonymizer_worker.model is not None:
+                    anonymization_model = self.anonymizer_worker.model
+                    print(f"🔧 DEBUG anonymize_frame_logic: model jest dostępny: {type(anonymization_model)}")
+                else:
+                    print("⚠️  DEBUG anonymize_frame_logic: anonymizer_worker.model jest None!")
             else:
-                # Fallback: jeśli nie ma modelu, zwróć oryginał
-                print("⚠️  Brak modelu anonimizacji - zwracam oryginalną klatkę")
-                return frame.copy()
+                print("⚠️  DEBUG anonymize_frame_logic: anonymizer_worker nie istnieje!")
             
             if anonymization_model is None:
+                # Fallback: jeśli nie ma modelu, zwróć oryginał
+                print("⚠️  Brak modelu anonimizacji - zwracam oryginalną klatkę")
                 return frame.copy()
             
             # Kopiuj klatkę aby nie modyfikować oryginału
@@ -1221,8 +1226,12 @@ class CameraController:
                 prediction = anonymization_model.predict(temp_path, confidence=40, overlap=30)
                 results = prediction.json()
                 
+                predictions = results.get('predictions', [])
+                print(f"🔧 DEBUG anonymize_frame_logic: Wykryto {len(predictions)} potencjalnych głów")
+                
+                heads_blurred = 0
                 # Przetwórz wyniki (format Roboflow: x, y = środek; width, height)
-                for det in results.get('predictions', []):
+                for det in predictions:
                     confidence = det.get('confidence', 0)
                     
                     # Wykrywamy głowy
@@ -1254,6 +1263,10 @@ class CameraController:
                         if roi.size > 0:
                             blur = cv2.GaussianBlur(roi, (99, 99), 30)
                             anonymized_frame[y1:y2, x1:x2] = blur
+                            heads_blurred += 1
+                            print(f"🔧 DEBUG anonymize_frame_logic: Zamazano głowę #{heads_blurred} (confidence: {confidence:.2f})")
+                
+                print(f"🔧 DEBUG anonymize_frame_logic: Łącznie zamazano {heads_blurred} głów")
             
             finally:
                 # Usuń tymczasowy plik
