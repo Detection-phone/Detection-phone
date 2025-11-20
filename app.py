@@ -203,57 +203,8 @@ with app.app_context():
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# Frontend Routes
-@app.route('/')
-def index():
-    if current_user.is_authenticated:
-        return render_template('dashboard.html')
-    return render_template('login.html')
-
-@app.route('/dashboard')
-@login_required
-def dashboard():
-    return render_template('dashboard.html')
-
-@app.route('/detections')
-@login_required
-def detections():
-    return render_template('detections.html')
-
-@app.route('/settings')
-@login_required
-def settings():
-    return render_template('settings.html')
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        # Handle both JSON (API) and form data
-        if request.is_json:
-            data = request.get_json()
-        else:
-            data = request.form
-        
-        username = data.get('username')
-        password = data.get('password')
-        
-        user = User.query.filter_by(username=username).first()
-        if user and user.check_password(password):
-            login_user(user)
-            next_page = request.args.get('next')
-            if next_page:
-                return redirect(next_page)
-            return redirect(url_for('dashboard'))
-        
-        # If JSON request, return JSON error
-        if request.is_json:
-            return jsonify({'message': 'Invalid credentials'}), 401
-        
-        # If form request, render login with error
-        return render_template('login.html', error='Nieprawidłowe dane logowania')
-    
-    # GET request - render login page
-    return render_template('login.html')
+# Frontend Routes - REMOVED: React handles routing, Flask only serves API
+# Old Flask templates routes removed to avoid conflicts with React frontend
 
 # API Routes
 @app.route('/api/login', methods=['POST'])
@@ -268,12 +219,6 @@ def api_login():
         return jsonify({'message': 'Login successful'})
     
     return jsonify({'message': 'Invalid credentials'}), 401
-
-@app.route('/logout')
-@login_required
-def logout_page():
-    logout_user()
-    return redirect(url_for('index'))
 
 @app.route('/api/logout')
 @login_required

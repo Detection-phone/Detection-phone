@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// Base URL for Flask API
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+// Base URL for Flask API - używa proxy, więc puste = względne ścieżki
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 // Create axios instance with default config
 const api = axios.create({
