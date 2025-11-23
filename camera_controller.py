@@ -153,8 +153,6 @@ class CameraController:
         else:
             self.available_cameras_list = []
             print("INFO: Brak przekazanej listy kamer - używam pustej listy.")
-
-        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
         
         # Uruchom główną pętlę kontrolera (która zarządza harmonogramem)
         self.camera_thread = threading.Thread(target=self._camera_loop)
@@ -754,15 +752,15 @@ class CameraController:
     def _handle_detection(self, frame, confidence, zone_name=None):
         """
         Obsługuje wykrycie telefonu:
-        1. Zapisuje ORYGINALNĄ klatkę (bez zamazanych twarzy!)
+        1. Zapisuje ORYGINALNĄ klatkę (bez zamazanych głów!)
         2. Dodaje do kolejki dla AnonymizerWorker z ZAMROŻONĄ konfiguracją blur
-        3. Worker zamaże twarze (jeśli włączone) i doda do DB
+        3. Worker zamaże głowy (jeśli włączone) i doda do DB
         """
         try:
             # Create detections directory if it doesn't exist
             os.makedirs('detections', exist_ok=True)
             
-            # Save ORIGINAL image (without blurred faces!)
+            # Save ORIGINAL image (without blurred heads!)
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'phone_{timestamp}.jpg'
             filepath = os.path.join('detections', filename)
@@ -786,7 +784,7 @@ class CameraController:
             print(f"🔧 DEBUG _handle_detection: blur_faces={self.blur_faces}, should_blur={should_blur}, self.settings['blur_faces']={self.settings.get('blur_faces', 'BRAK')}")
             
             # Dodaj do kolejki dla AnonymizerWorker
-            # Worker zamaże twarze (jeśli should_blur=True) i zapisze do DB
+            # Worker zamaże głowy (jeśli should_blur=True) i zapisze do DB
             detection_data = {
                 'filepath': filepath,  # Pełna ścieżka
                 'confidence': confidence,
@@ -964,7 +962,7 @@ class CameraController:
                     time.sleep(0.1)
                     continue
                 
-                # KLUCZOWE: NIE zamazuj twarzy w real-time!
+                # KLUCZOWE: NIE zamazuj głów w real-time!
                 # Zamazywanie będzie robione OFFLINE przez AnonymizerWorker
                 # Wyświetlamy ORYGINALNĄ klatkę bez zamazania
                 try:
@@ -1043,19 +1041,6 @@ class CameraController:
                                             except Exception:
                                                 x1f, y1f, x2f, y2f = 0.0, 0.0, 1.0, 1.0
                                             norm_cx = center_x / max(1, frame_width)
-                                            norm_cy = center_y / max(1, frame_height)
-                                            allow = (x1f <= norm_cx <= x2f) and (y1f <= norm_cy <= y2f)
-                                        if not allow:
-                                            continue
-                                        
-                                        # Użyj starej metody _handle_detection bez strefy
-                                        try:
-                                            frame_copy = frame.copy()
-                                            self._handle_detection(frame_copy, confidence, None)
-                                        except cv2.error as copy_err:
-                                            print(f"Błąd OpenCV podczas kopiowania klatki dla legacy detekcji: {copy_err}")
-                                            opencv_error_count += 1
-                                        except Exception as copy_err:
                                             print(f"Błąd podczas kopiowania klatki dla legacy detekcji: {copy_err}")
 
                                     # Rysuj bounding box na wyświetlanej klatce

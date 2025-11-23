@@ -1,114 +1,114 @@
-# Development Rules
+# Zasady Programowania
 
-## Basic Rules
-1. Always use English in comments and documentation
-2. Maintain consistent code structure
-3. Document code changes
-4. Test changes before implementation
+## Podstawowe Zasady
+1. Zawsze używaj polskiego w komentarzach i dokumentacji
+2. Utrzymuj spójną strukturę kodu
+3. Dokumentuj zmiany w kodzie
+4. Testuj zmiany przed implementacją
 
-## Project Structure
-- `app.py` - main Flask application
-- `config.py` - configuration and database models
-- `phone_detector.py` - phone detection logic
-- `templates/` - HTML files
-- `static/` - static files (CSS, JS, images)
-- `instance/` - configuration files
-- `detections/` - detection storage
+## Struktura Projektu
+- `app.py` - główna aplikacja Flask
+- `config.py` - konfiguracja i modele bazy danych
+- `phone_detector.py` - logika detekcji telefonów
+- `templates/` - pliki HTML
+- `static/` - pliki statyczne (CSS, JS, obrazy)
+- `instance/` - pliki konfiguracyjne
+- `detections/` - przechowywanie detekcji
 
-## Naming Conventions
-- Python files: snake_case (e.g., `phone_detector.py`)
-- Classes: PascalCase (e.g., `PhoneDetector`)
-- Functions: snake_case (e.g., `detect_phone`)
-- Variables: snake_case (e.g., `detection_count`)
+## Konwencje Nazewnictwa
+- Pliki Python: snake_case (np. `phone_detector.py`)
+- Klasy: PascalCase (np. `PhoneDetector`)
+- Funkcje: snake_case (np. `detect_phone`)
+- Zmienne: snake_case (np. `detection_count`)
 
-## Code Organization
-1. Each file should have a clear purpose
-2. Keep related functionality together
-3. Use meaningful file and folder names
-4. Maintain a logical directory structure
+## Organizacja Kodu
+1. Każdy plik powinien mieć jasny cel
+2. Trzymaj powiązaną funkcjonalność razem
+3. Używaj znaczących nazw plików i folderów
+4. Utrzymuj logiczną strukturę katalogów
 
-## Security Rules
-1. Never store sensitive data in code (passwords, API keys)
-2. Use environment variables for sensitive data
-3. Regularly update dependencies
-4. Check code for vulnerabilities
+## Zasady Bezpieczeństwa
+1. Nigdy nie przechowuj wrażliwych danych w kodzie (hasła, klucze API)
+2. Używaj zmiennych środowiskowych dla wrażliwych danych
+3. Regularnie aktualizuj zależności
+4. Sprawdzaj kod pod kątem luk bezpieczeństwa
 
-## Testing Rules
-1. Test new features before implementation
-2. Maintain unit tests
-3. Check functionality on different operating systems
-4. Document found bugs
+## Zasady Testowania
+1. Testuj nowe funkcje przed implementacją
+2. Utrzymuj testy jednostkowe
+3. Sprawdzaj funkcjonalność na różnych systemach operacyjnych
+4. Dokumentuj znalezione błędy
 
-## Documentation Rules
-1. Document all new functions
-2. Update documentation for significant changes
-3. Use docstrings in Python code
-4. Maintain current API documentation
+## Zasady Dokumentacji
+1. Dokumentuj wszystkie nowe funkcje
+2. Aktualizuj dokumentację przy znaczących zmianach
+3. Używaj docstringów w kodzie Python
+4. Utrzymuj aktualną dokumentację API
 
-## Notification Handling Rules
-1. Message Formatting:
-   - Use templates from `templates/notifications/`
-   - Maintain consistent message style
-   - Shorten links in SMS messages
+## Zasady Obsługi Powiadomień
+1. Formatowanie Wiadomości:
+   - Używaj szablonów z `templates/notifications/`
+   - Utrzymuj spójny styl wiadomości
+   - Skracaj linki w wiadomościach SMS
 
-2. Error Handling:
-   - Log all sending errors
-   - Implement retry mechanism
-   - Notify about critical errors
-   - Keep message backups
+2. Obsługa Błędów:
+   - Loguj wszystkie błędy wysyłania
+   - Zaimplementuj mechanizm ponawiania
+   - Powiadamiaj o krytycznych błędach
+   - Przechowuj kopie zapasowe wiadomości
 
-3. Security:
-   - Encrypt sensitive data
-   - Use access tokens
-   - Rotate API keys
-   - Monitor usage limits
+3. Bezpieczeństwo:
+   - Szyfruj wrażliwe dane
+   - Używaj tokenów dostępu
+   - Rotuj klucze API
+   - Monitoruj limity użycia
 
-## Google Drive Integration Rules
-1. File Structure:
-   - Maintain folder hierarchy
-   - Use timestamps in filenames
-   - Generate metadata for each file
-   - Implement cleanup mechanism
+## Zasady Integracji z Google Drive
+1. Struktura Plików:
+   - Utrzymuj hierarchię folderów
+   - Używaj znaczników czasu w nazwach plików
+   - Generuj metadane dla każdego pliku
+   - Zaimplementuj mechanizm czyszczenia
 
-2. Permission Management:
-   - Use service account
-   - Restrict folder access
-   - Regularly verify permissions
-   - Log file operations
+2. Zarządzanie Uprawnieniami:
+   - Używaj konta serwisowego
+   - Ogranicz dostęp do folderów
+   - Regularnie weryfikuj uprawnienia
+   - Loguj operacje na plikach
 
-3. Optimization:
-   - Compress images before upload
-   - Use asynchronous uploading
-   - Implement task queuing
-   - Monitor space usage
+3. Optymalizacja:
+   - Kompresuj obrazy przed przesłaniem
+   - Używaj asynchronicznego przesyłania
+   - Zaimplementuj kolejkowanie zadań
+   - Monitoruj użycie przestrzeni
 
-4. Error Handling:
-   - Implement retry mechanism
-   - Log synchronization errors
-   - Keep local backups
-   - Notify about issues
+4. Obsługa Błędów:
+   - Zaimplementuj mechanizm ponawiania
+   - Loguj błędy synchronizacji
+   - Przechowuj lokalne kopie zapasowe
+   - Powiadamiaj o problemach
 
-## Notification Testing Rules
-1. Unit Tests:
-   - Test each notification type
-   - Verify message formats
-   - Check error handling
-   - Test limits and restrictions
+## Zasady Testowania Powiadomień
+1. Testy Jednostkowe:
+   - Testuj każdy typ powiadomienia
+   - Weryfikuj formaty wiadomości
+   - Sprawdzaj obsługę błędów
+   - Testuj limity i ograniczenia
 
-2. Integration Tests:
-   - Verify data flow
-   - Test queuing
-   - Check synchronization
-   - Verify priorities
+2. Testy Integracyjne:
+   - Weryfikuj przepływ danych
+   - Testuj kolejkowanie
+   - Sprawdzaj synchronizację
+   - Weryfikuj priorytety
 
-3. Performance Tests:
-   - Measure sending time
-   - Check load
-   - Test under load
-   - Monitor resources
+3. Testy Wydajnościowe:
+   - Mierz czas wysyłania
+   - Sprawdzaj obciążenie
+   - Testuj pod obciążeniem
+   - Monitoruj zasoby
 
-4. Security Tests:
-   - Verify encryption
-   - Test authorization
-   - Check limits
-   - Verify logs 
+4. Testy Bezpieczeństwa:
+   - Weryfikuj szyfrowanie
+   - Testuj autoryzację
+   - Sprawdzaj limity
+   - Weryfikuj logi
