@@ -423,12 +423,6 @@ python-dotenv==1.0.0
 8. **Vonage** - SMS notifications
 9. **Yagmail** - Email notifications
 
-### ❌ NIE UŻYWANE (usunięte):
-1. ~~MediaPipe~~ - Nie jest używane
-2. ~~OpenCV DNN Face Detection~~ - Nie jest używane
-3. ~~Haar Cascade~~ - Nie jest używane
-4. ~~face_recognition~~ - Nie jest używane
-
 ---
 
 ## 🔍 Kluczowe Pliki
@@ -442,5 +436,3 @@ python-dotenv==1.0.0
 
 ---
 
-**Data analizy:** 2025-11-23  
-**Status:** ✅ Kompletna analiza
