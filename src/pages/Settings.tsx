@@ -199,10 +199,7 @@ const Settings: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Fetch settings
         const fetchedSettings = await settingsAPI.get();
-        
-        console.log('📡 Fetched settings:', fetchedSettings);
         
         // Set available cameras (ensure it's always an array)
         if (fetchedSettings.available_cameras && Array.isArray(fetchedSettings.available_cameras)) {
@@ -325,7 +322,6 @@ const Settings: React.FC = () => {
         ...(settings.roi ? { roi_coordinates: settings.roi } : {}),
       };
 
-      console.log('💾 Saving settings:', payload);
       const response = await settingsAPI.update(payload);
       
       // Update camera status from response
@@ -794,7 +790,6 @@ const Settings: React.FC = () => {
   const handleStartCamera = async () => {
     setCameraLoading(true);
     try {
-      console.log('🚀 Starting camera...');
       const response = await cameraAPI.start();
       setCameraStatus({
         isRunning: response.camera_status.is_running,
@@ -820,7 +815,6 @@ const Settings: React.FC = () => {
   const handleStopCamera = async () => {
     setCameraLoading(true);
     try {
-      console.log('🛑 Stopping camera...');
       const response = await cameraAPI.stop();
       setCameraStatus({
         isRunning: response.camera_status.is_running,

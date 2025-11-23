@@ -1,18 +1,13 @@
-from flask import Flask, request, jsonify, render_template, send_from_directory, redirect, url_for, Response
+from flask import Flask, request, jsonify, send_from_directory, Response
 import time
 import cv2
 from flask_cors import CORS
 import numpy as np
-from flask_cors import CORS
-from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_login import LoginManager, login_user, logout_user, login_required
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
-import cv2
-import numpy as np
 from ultralytics import YOLO
-import json
-import torch
 from models import db, User, Detection, Settings, DEFAULT_SCHEDULE
 from camera_controller import CameraController
 import logging
@@ -35,8 +30,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# ✅ CORS configuration for React frontend (applies to ALL routes)
-# Allows requests from http://localhost:3000 to every Flask route, including /detections/*
 CORS(
     app,
     origins=["http://localhost:3000"],
@@ -48,7 +41,6 @@ app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'novaya')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI', 'sqlite:///admin.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# ✅ DETECTION FOLDER: Absolute path to detections directory
 DETECTION_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'detections')
 
 # Initialize extensions
@@ -209,10 +201,6 @@ with app.app_context():
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# Frontend Routes - REMOVED: React handles routing, Flask only serves API
-# Old Flask templates routes removed to avoid conflicts with React frontend
-
-# API Routes
 @app.route('/api/login', methods=['POST'])
 def api_login():
     data = request.get_json()
@@ -369,61 +357,6 @@ def detections_over_time_stats():
         logger.error(f"Error building detections_over_time stats: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/detections', methods=['POST'])
-@login_required
-def create_detection():
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image provided'}), 400
-    
-    file = request.files['image']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-
-    # Save image
-    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-    os.makedirs('detections', exist_ok=True)
-    filepath = os.path.join('detections', filename)
-    file.save(filepath)
-
-    # Process image with YOLO
-    if model is None:
-        return jsonify({'error': 'YOLO model not loaded'}), 500
-        
-    results = model(filepath)
-    
-    # Check for phone detection
-    phone_detected = False
-    confidence = 0.0
-    
-    for result in results:
-        boxes = result.boxes
-        for box in boxes:
-            if box.cls == 67:  # Class ID for cell phone in COCO dataset
-                phone_detected = True
-                confidence = float(box.conf)
-                break
-
-    if phone_detected:
-        detection = Detection(
-            location=request.form.get('location', 'Unknown'),
-            confidence=confidence,
-            image_path=filename,  # Only filename
-            status='Pending'
-        )
-        db.session.add(detection)
-        db.session.commit()
-        
-        return jsonify({
-            'message': 'Phone detected',
-            'detection': {
-                'id': detection.id,
-                'timestamp': detection.timestamp.isoformat(),
-                'confidence': detection.confidence
-            }
-        })
-    
-    return jsonify({'message': 'No phone detected'})
-
 @app.route('/api/settings', methods=['GET'])
 @login_required
 def get_settings():
@@ -440,11 +373,8 @@ def get_settings():
         traceback.print_exc()
         available_cameras = []
     
-    # --- KLUCZOWA POPRAWKA (FALLBACK) ---
-    # Jeśli lista jest pusta, dodaj domyślną kamerę, aby UI nie było puste
     if not available_cameras:
         logger.warning("OSTRZEŻENIE: Skanowanie kamer nie zwróciło wyników. Dodaję domyślny fallback (Kamera 0).")
-        print("⚠️ OSTRZEŻENIE: Skanowanie kamer nie zwróciło wyników. Dodaję domyślny fallback (Kamera 0).")
         available_cameras = [
             {
                 'index': 0,
@@ -493,8 +423,6 @@ def get_settings():
 @login_required
 def update_settings():
     data = request.get_json()
-    print("\nReceived settings update request")
-    print(f"Data: {data}")
     
     try:
         # Update camera controller settings
@@ -521,7 +449,6 @@ def update_settings():
                 except ValueError as e:
                     raise ValueError(f"Invalid time format for {day}: {e}")
             camera_settings['schedule'] = schedule
-            print(f"📅 Schedule updated: {schedule}")
         
         # Handle camera selection
         if 'camera_index' in data:
@@ -536,10 +463,8 @@ def update_settings():
         if 'notifications' in data:
             if 'sms' in data['notifications']:
                 camera_settings['sms_notifications'] = data['notifications']['sms']
-                print(f"📱 SMS notifications: {data['notifications']['sms']}")
             if 'email' in data['notifications']:
                 camera_settings['email_notifications'] = data['notifications']['email']
-                print(f"📧 Email notifications: {data['notifications']['email']}")
 
         # Handle anonymization percent
         if 'anonymization_percent' in data:
@@ -571,20 +496,16 @@ def update_settings():
         # Aktualizuj config z nowymi wartościami
         if 'blur_faces' in camera_settings:
             config['blur_faces'] = camera_settings['blur_faces']
-            print(f"🔧 DEBUG: Zapisuję do DB config['blur_faces'] = {camera_settings['blur_faces']}")
         if 'confidence_threshold' in camera_settings:
             config['confidence_threshold'] = camera_settings['confidence_threshold']
-            print(f"🔧 DEBUG: Zapisuję do DB config['confidence_threshold'] = {camera_settings['confidence_threshold']}")
         if 'camera_index' in camera_settings:
             config['camera_index'] = camera_settings['camera_index']
         if 'camera_name' in camera_settings:
             config['camera_name'] = camera_settings['camera_name']
         if 'email_notifications' in camera_settings:
             config['email_notifications'] = camera_settings['email_notifications']
-            print(f"🔧 DEBUG: Zapisuję do DB config['email_notifications'] = {camera_settings['email_notifications']}")
         if 'sms_notifications' in camera_settings:
             config['sms_notifications'] = camera_settings['sms_notifications']
-            print(f"🔧 DEBUG: Zapisuję do DB config['sms_notifications'] = {camera_settings['sms_notifications']}")
         if 'anonymization_percent' in camera_settings:
             config['anonymization_percent'] = camera_settings['anonymization_percent']
         if 'roi_coordinates' in camera_settings:
@@ -595,8 +516,6 @@ def update_settings():
         settings_db.updated_at = datetime.utcnow()
         db.session.commit()
         
-        print(f"✅ Zapisano ustawienia do bazy danych (config): {config}")
-        
         # Dodaj ustawienia jako atrybuty obiektu (dla kompatybilności z update_settings)
         settings_db.blur_faces = config.get('blur_faces', True)
         settings_db.confidence_threshold = config.get('confidence_threshold', 0.2)
@@ -604,13 +523,6 @@ def update_settings():
         settings_db.sms_notifications = config.get('sms_notifications', False)
         settings_db.camera_name = config.get('camera_name', 'Camera 1')
         settings_db.camera_index = config.get('camera_index', 0)
-        
-        # DEBUG: Sprawdź wartości przed przekazaniem
-        print(f"🔧 DEBUG: Przed update_settings:")
-        print(f"  - blur_faces: {getattr(settings_db, 'blur_faces', 'BRAK')}")
-        print(f"  - confidence_threshold: {getattr(settings_db, 'confidence_threshold', 'BRAK')}")
-        print(f"  - email_notifications: {getattr(settings_db, 'email_notifications', 'BRAK')}")
-        print(f"  - sms_notifications: {getattr(settings_db, 'sms_notifications', 'BRAK')}")
         
         # Przekaż zaktualizowany obiekt 'settings' do kontrolera
         camera_controller.update_settings(settings_db)
@@ -623,7 +535,7 @@ def update_settings():
             }
         })
     except Exception as e:
-        print(f"Error updating settings: {e}")
+        logger.error(f"Error updating settings: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -633,8 +545,7 @@ def update_settings():
 def start_camera():
     """Manually start the camera (ignore schedule)"""
     try:
-        print("\n🚀 Manual camera start requested")
-        camera_controller.manual_stop_engaged = False  # Resetuj blokadę manual stop
+        camera_controller.manual_stop_engaged = False
         camera_controller.start_camera()
         return jsonify({
             'message': 'Camera started successfully',
@@ -644,7 +555,7 @@ def start_camera():
             }
         })
     except Exception as e:
-        print(f"❌ Error starting camera: {e}")
+        logger.error(f"Error starting camera: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/camera/stop', methods=['POST'])
@@ -652,8 +563,7 @@ def start_camera():
 def stop_camera():
     """Manually stop the camera"""
     try:
-        print("\n🛑 Manual camera stop requested")
-        camera_controller.manual_stop_engaged = True  # Ustaw blokadę manual stop
+        camera_controller.manual_stop_engaged = True
         camera_controller.stop_camera()
         return jsonify({
             'message': 'Camera stopped successfully',
@@ -663,7 +573,7 @@ def stop_camera():
             }
         })
     except Exception as e:
-        print(f"❌ Error stopping camera: {e}")
+        logger.error(f"Error stopping camera: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/camera/status', methods=['GET'])
@@ -680,7 +590,7 @@ def camera_status():
             }
         })
     except Exception as e:
-        print(f"❌ Error getting camera status: {e}")
+        logger.error(f"Error getting camera status: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ✅ Serve detection images (secure endpoint with absolute path)
@@ -692,19 +602,14 @@ def serve_detection_image(filename):
     Uses absolute path to ensure cross-platform compatibility.
     """
     try:
-        print(f"📸 Serving image: {filename} from {DETECTION_FOLDER}")
         return send_from_directory(DETECTION_FOLDER, filename)
     except FileNotFoundError:
-        print(f"❌ Image not found: {filename}")
+        logger.warning(f"Image not found: {filename}")
         return jsonify({'error': 'Image not found'}), 404
     except Exception as e:
-        print(f"❌ Error serving image {filename}: {e}")
+        logger.error(f"Error serving image {filename}: {e}")
         return jsonify({'error': str(e)}), 500
 
-# =========================
-# Camera MJPEG video stream
-# =========================
-# Placeholder image (Garfield) path - use absolute path
 PLACEHOLDER_IMG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'images', 'looking.png')
 
 # Preload and encode placeholder once
@@ -790,24 +695,19 @@ def generate_frames():
                     else:
                         frame_bytes = buffer.tobytes()
                 except Exception as proc_err:
-                    # Błąd podczas przetwarzania (np. frame zmienił się w trakcie)
-                    print(f"BŁĄD W WĄTKU STREAMINGU (przetwarzanie Canny): {proc_err}")
+                    logger.debug(f"Error processing frame in video stream: {proc_err}")
                     frame_bytes = PLACEHOLDER_BYTES
 
         except Exception as e:
-            # Jeśli cokolwiek pójdzie nie tak (np. cv::Mat::Mat, wyścig wątków),
-            # złap błąd i wyślij placeholder, zamiast zawieszać wątek.
-            print(f"BŁĄD W WĄTKU STREAMINGU (generate_frames): {e}")
+            logger.debug(f"Error in video stream generation: {e}")
             frame_bytes = PLACEHOLDER_BYTES
         
-        # Zawsze coś wysyłaj, aby utrzymać połączenie
         try:
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.05)  # Ok. 20 FPS
+            time.sleep(0.05)
         except Exception as yield_err:
-            # Jeśli yield się nie powiedzie, poczekaj i spróbuj ponownie
-            print(f"BŁĄD W WĄTKU STREAMINGU (yield): {yield_err}")
+            logger.debug(f"Error yielding frame: {yield_err}")
             time.sleep(0.1)
             continue
 
@@ -816,94 +716,6 @@ def generate_frames():
 def video_feed():
     """Stream live camera frames as MJPEG for the frontend settings page."""
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-def anonymize_frame(frame, anonymization_model, settings):
-    """
-    Anonimizuje wykryte głowy na numpy array (frame).
-    Używa modelu Roboflow head-detection do wykrywania i zamazywania całej głowy.
-    
-    Args:
-        frame: numpy array (BGR image)
-        anonymization_model: Roboflow model instance (head-detection)
-        settings: camera controller settings dict (nieużywane, zachowane dla kompatybilności)
-        
-    Returns:
-        anonymized_frame: numpy array z zanonimizowanymi głowami
-    """
-    try:
-        if anonymization_model is None:
-            logger.warning("Anonymization model not available, returning original frame")
-            return frame.copy()
-        
-        # Kopiuj klatkę aby nie modyfikować oryginału
-        anonymized_frame = frame.copy()
-        img_h, img_w = anonymized_frame.shape[:2]
-        
-        # Zapisz klatkę tymczasowo (Roboflow wymaga pliku)
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            temp_path = tmp.name
-            cv2.imwrite(temp_path, frame)
-        
-        try:
-            # Wykryj głowy za pomocą modelu Roboflow
-            prediction = anonymization_model.predict(temp_path, confidence=40, overlap=30)
-            results = prediction.json()
-            heads_found = 0
-            
-            # Przetwórz wyniki (format Roboflow: x, y = środek; width, height)
-            for det in results.get('predictions', []):
-                confidence = det.get('confidence', 0)
-                
-                # Wykrywamy głowy
-                if confidence >= 0.4:  # 0.4 = 40%
-                    heads_found += 1
-                    
-                    # Pobierz współrzędne (Roboflow: środek + wymiary)
-                    center_x = int(det['x'])
-                    center_y = int(det['y'])
-                    width = int(det['width'])
-                    height = int(det['height'])
-                    
-                    # Konwertuj na (x1, y1, x2, y2)
-                    x1 = center_x - width // 2
-                    y1 = center_y - height // 2
-                    x2 = center_x + width // 2
-                    y2 = center_y + height // 2
-                    
-                    # Upewnij się, że współrzędne są w granicach obrazu
-                    x1, y1 = max(0, x1), max(0, y1)
-                    x2, y2 = min(img_w, x2), min(img_h, y2)
-                    
-                    # Sprawdź czy ROI ma sens
-                    if x2 <= x1 or y2 <= y1:
-                        continue
-                    
-                    # Wybierz region (całą głowę)
-                    roi = anonymized_frame[y1:y2, x1:x2]
-                    
-                    # Zastosuj silne rozmycie
-                    if roi.size > 0:
-                        blur = cv2.GaussianBlur(roi, (99, 99), 30)
-                        anonymized_frame[y1:y2, x1:x2] = blur
-            
-            if heads_found > 0:
-                logger.info(f"Anonymized {heads_found} heads in config snapshot")
-        
-        finally:
-            # Usuń tymczasowy plik
-            try:
-                os.remove(temp_path)
-            except:
-                pass
-        
-        return anonymized_frame
-        
-    except Exception as e:
-        logger.error(f"Error anonymizing frame: {e}")
-        import traceback
-        traceback.print_exc()
-        return frame.copy()  # Return original on error
 
 @app.route('/api/settings/roi', methods=['GET'])
 @login_required

@@ -151,7 +151,6 @@ const Dashboard: React.FC = () => {
         setLoading(true);
         const data = await dashboardAPI.getStats();
         setStats(data);
-        console.log('✅ Dashboard data loaded:', data);
         setError(null);
       } catch (err: any) {
         console.error('❌ Failed to fetch dashboard data:', err);

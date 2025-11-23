@@ -82,8 +82,6 @@ const Detections: React.FC = () => {
       // ✅ FIXED: Ensure detections is always an array
       setDetections(response.detections || []);
       setTotalPages(response.total_pages || 0);
-      const detectionsCount = (response.detections || []).length;
-      console.log('✅ Detections loaded:', detectionsCount, 'items (page', page, 'of', response.total_pages || 0, ')');
       setError(null);
     } catch (err: any) {
       console.error('❌ Failed to fetch detections:', err);
@@ -141,7 +139,6 @@ const Detections: React.FC = () => {
     }
 
     try {
-      console.log('🗑️ Deleting detection:', detection.id);
       // Optimistic UI: remove immediately
       const backup = detections;
       setDetections(prev => prev.filter(d => d.id !== detection.id));
@@ -218,7 +215,6 @@ const Detections: React.FC = () => {
     if (idsToDelete.length === 0) return;
 
     try {
-      console.log('🗑️ Deleting detections:', idsToDelete);
       await detectionAPI.deleteBatch(idsToDelete);
       
       // Odśwież stronę

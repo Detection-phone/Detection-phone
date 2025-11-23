@@ -67,22 +67,3 @@ class Settings(db.Model):
             db.session.commit()
         return settings
     
-    def update_schedule(self, new_schedule):
-        """Update the schedule with validation"""
-        # Validate that all 7 days are present
-        days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-        for day in days:
-            if day not in new_schedule:
-                raise ValueError(f"Missing day: {day}")
-            day_config = new_schedule[day]
-            if 'enabled' not in day_config or 'start' not in day_config or 'end' not in day_config:
-                raise ValueError(f"Invalid config for {day}")
-            # Validate time format
-            try:
-                datetime.strptime(day_config['start'], '%H:%M')
-                datetime.strptime(day_config['end'], '%H:%M')
-            except ValueError:
-                raise ValueError(f"Invalid time format for {day}")
-        
-        self.schedule = new_schedule
-        self.updated_at = datetime.utcnow() 

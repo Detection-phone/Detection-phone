@@ -38,8 +38,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Store auth token
       localStorage.setItem('auth_token', 'authenticated');
       setIsAuthenticated(true);
-      
-      console.log('✅ Login successful:', response);
       navigate('/dashboard');
     } catch (error: any) {
       console.error('❌ Login failed:', error);
@@ -49,9 +47,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     try {
-      // ✅ FIXED: Real API call to Flask backend
       await authAPI.logout();
-      console.log('✅ Logout successful');
     } catch (error) {
       console.error('❌ Logout error:', error);
     } finally {

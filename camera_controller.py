@@ -4,14 +4,12 @@ from datetime import datetime, timedelta, time as dt_time
 import cv2
 from ultralytics import YOLO
 import os
-from flask import current_app
 from models import db, Detection, User
 from queue import Queue
 import json
 import subprocess
 import re
 import numpy as np
-import textwrap
 from dotenv import load_dotenv
 
 # Load environment variables from .env file (Email, Cloudinary, Vonage)
@@ -234,7 +232,7 @@ class CameraController:
                 print(f"Error: Could not open camera with index {self.camera_index}")
                 # Try to find alternative camera
                 print("Scanning for available cameras...")
-                available_cameras = self.scan_available_cameras()
+                available_cameras = self.get_available_cameras()
                 if available_cameras:
                     print("Available cameras:")
                     for cam in available_cameras:
@@ -286,52 +284,30 @@ class CameraController:
             self.confidence_threshold = float(settings_model.confidence_threshold)
             print(f"INFO: Zaktualizowano confidence_threshold: {self.confidence_threshold}")
         
-        # --- AKTUALIZUJ WEWNĘTRZNE ZMIENNE POWIADOMIEŃ ---
-        # DEBUG: Sprawdź co otrzymaliśmy
-        print(f"🔧 DEBUG: update_settings otrzymał settings_model typu: {type(settings_model)}")
-        print(f"🔧 DEBUG: hasattr(settings_model, 'email_notifications'): {hasattr(settings_model, 'email_notifications')}")
-        if hasattr(settings_model, 'email_notifications'):
-            print(f"🔧 DEBUG: settings_model.email_notifications = {settings_model.email_notifications} (typ: {type(settings_model.email_notifications)})")
-        
-        # Sprawdź różne możliwe źródła danych (model może mieć różne struktury)
         email_value = None
         sms_value = None
         
         if hasattr(settings_model, 'email_notifications'):
             email_value = settings_model.email_notifications
-            print(f"🔧 DEBUG: Odczytano email_notifications z atrybutu: {email_value}")
         elif hasattr(settings_model, 'email_enabled'):
             email_value = settings_model.email_enabled
-            print(f"🔧 DEBUG: Odczytano email_enabled z atrybutu: {email_value}")
         elif isinstance(settings_model, dict) and 'email_notifications' in settings_model:
             email_value = settings_model['email_notifications']
-            print(f"🔧 DEBUG: Odczytano email_notifications ze słownika: {email_value}")
         
         if email_value is not None:
             self.email_enabled = bool(email_value)
             self.email_notifications = bool(email_value)
-            print(f"🔧 DEBUG: Ustawiono self.email_enabled = {self.email_enabled}")
-        else:
-            print(f"⚠️  DEBUG: Nie znaleziono wartości email_notifications - pozostawiamy domyślną: {self.email_enabled}")
         
         if hasattr(settings_model, 'sms_notifications'):
             sms_value = settings_model.sms_notifications
-            print(f"🔧 DEBUG: Odczytano sms_notifications z atrybutu: {sms_value}")
         elif hasattr(settings_model, 'sms_enabled'):
             sms_value = settings_model.sms_enabled
-            print(f"🔧 DEBUG: Odczytano sms_enabled z atrybutu: {sms_value}")
         elif isinstance(settings_model, dict) and 'sms_notifications' in settings_model:
             sms_value = settings_model['sms_notifications']
-            print(f"🔧 DEBUG: Odczytano sms_notifications ze słownika: {sms_value}")
         
         if sms_value is not None:
             self.sms_enabled = bool(sms_value)
             self.sms_notifications = bool(sms_value)
-            print(f"🔧 DEBUG: Ustawiono self.sms_enabled = {self.sms_enabled}")
-        else:
-            print(f"⚠️  DEBUG: Nie znaleziono wartości sms_notifications - pozostawiamy domyślną: {self.sms_enabled}")
-        
-        print(f"INFO: Zaktualizowano wewnętrzne zmienne powiadomień: email={self.email_enabled}, sms={self.sms_enabled}")
         
         # Zaktualizuj słownik settings dla kompatybilności z AnonymizerWorker
         self.settings['email_notifications'] = self.email_enabled
@@ -346,59 +322,9 @@ class CameraController:
             'camera_index': self.assigned_camera_index,
         })
         
-        # --- KLUCZOWA LINIA: Przekaż ustawienia do workera (przekazujemy self, aby worker mógł odczytać zaktualizowane wartości) ---
         if hasattr(self, 'anonymizer_worker') and self.anonymizer_worker is not None:
             self.anonymizer_worker.update_worker_settings(self)
-        
-        print(f"INFO: Aktualizacja ustawień zakończona:")
-        print(f"  - blur_faces: {self.blur_faces}")
-        print(f"  - confidence_threshold: {self.confidence_threshold}")
-        print(f"  - email_notifications: {self.email_enabled}")
-        print(f"  - sms_notifications: {self.sms_enabled}")
     
-    def update_settings_dict(self, settings):
-        """Update camera settings from dict (legacy method, kept for compatibility)"""
-        print("\nUpdating camera settings from dict (legacy)...")
-        # Merge new settings into existing settings
-        # Chroń camera_name przed nadpisaniem na None
-        new_camera_name = settings.get('camera_name')
-        
-        if new_camera_name:
-            self.camera_name = new_camera_name
-        
-        # Aktualizuj pozostałe ustawienia
-        if 'schedule' in settings:
-            self.schedule = settings['schedule'].copy()
-        if 'blur_faces' in settings:
-            self.blur_faces = settings['blur_faces']
-        if 'confidence_threshold' in settings:
-            self.confidence_threshold = settings['confidence_threshold']
-        if 'camera_index' in settings:
-            self.assigned_camera_index = int(settings['camera_index'])
-        if 'sms_notifications' in settings:
-            self.sms_notifications = settings['sms_notifications']
-        if 'email_notifications' in settings:
-            self.email_notifications = settings['email_notifications']
-        if 'anonymization_percent' in settings:
-            self.anonymization_percent = settings['anonymization_percent']
-        if 'roi_coordinates' in settings:
-            self.roi_coordinates = settings['roi_coordinates']
-        
-        # Zaktualizuj słownik settings dla kompatybilności
-        self.settings.update({
-            'schedule': self.schedule,
-            'blur_faces': self.blur_faces,
-            'confidence_threshold': self.confidence_threshold,
-            'camera_index': self.assigned_camera_index,
-            'camera_name': self.camera_name,
-            'sms_notifications': self.sms_notifications,
-            'email_notifications': self.email_notifications,
-            'anonymization_percent': self.anonymization_percent,
-            'roi_coordinates': self.roi_coordinates
-        })
-        
-        print(f"Updated settings: {self.settings}")
-
     def _is_within_schedule(self):
         """Check if current time is within camera operation schedule (weekly)"""
         try:
@@ -777,27 +703,19 @@ class CameraController:
             except cv2.error as cv_err:
                 raise Exception(f"OpenCV error during imwrite: {cv_err}")
             
-            print(f"💾 Zapisano ORYGINALNĄ klatkę: {filepath}")
-            
-            # KLUCZOWE: Zamroź konfigurację blur w momencie detekcji
-            # Ta wartość zostanie przekazana do workera razem z zadaniem
             should_blur = self.settings.get('blur_faces', True)
-            print(f"🔧 DEBUG _handle_detection: blur_faces={self.blur_faces}, should_blur={should_blur}, self.settings['blur_faces']={self.settings.get('blur_faces', 'BRAK')}")
             
-            # Dodaj do kolejki dla AnonymizerWorker
-            # Worker zamaże głowy (jeśli should_blur=True) i zapisze do DB
             detection_data = {
-                'filepath': filepath,  # Pełna ścieżka
+                'filepath': filepath,
                 'confidence': confidence,
-                'should_blur': should_blur,  # Pipe the setting!
-                'zone_name': zone_name  # Nazwa strefy (np. "ławka 1") lub None
+                'should_blur': should_blur,
+                'zone_name': zone_name
             }
             self.detection_queue.put(detection_data)
-            blur_status = "z zamazaniem" if should_blur else "BEZ zamazania"
-            print(f"📤 Dodano do kolejki anonimizacji {blur_status} (rozmiar: {self.detection_queue.qsize()})")
             
         except Exception as e:
-            print(f"❌ Błąd zapisu detekcji: {e}")
+            import logging
+            logging.error(f"Error saving detection: {e}")
             if 'filepath' in locals() and os.path.exists(filepath):
                 os.remove(filepath)
 
@@ -1238,18 +1156,10 @@ class CameraController:
             # Użyj modelu z AnonymizerWorker jeśli dostępny
             anonymization_model = None
             if hasattr(self, 'anonymizer_worker'):
-                print(f"🔧 DEBUG anonymize_frame_logic: anonymizer_worker istnieje")
                 if self.anonymizer_worker.model is not None:
                     anonymization_model = self.anonymizer_worker.model
-                    print(f"🔧 DEBUG anonymize_frame_logic: model jest dostępny: {type(anonymization_model)}")
-                else:
-                    print("⚠️  DEBUG anonymize_frame_logic: anonymizer_worker.model jest None!")
-            else:
-                print("⚠️  DEBUG anonymize_frame_logic: anonymizer_worker nie istnieje!")
             
             if anonymization_model is None:
-                # Fallback: jeśli nie ma modelu, zwróć oryginał
-                print("⚠️  Brak modelu anonimizacji - zwracam oryginalną klatkę")
                 return frame.copy()
             
             # Kopiuj klatkę aby nie modyfikować oryginału
@@ -1268,7 +1178,6 @@ class CameraController:
                 results = prediction.json()
                 
                 predictions = results.get('predictions', [])
-                print(f"🔧 DEBUG anonymize_frame_logic: Wykryto {len(predictions)} potencjalnych głów")
                 
                 heads_blurred = 0
                 # Przetwórz wyniki (format Roboflow: x, y = środek; width, height)
@@ -1305,9 +1214,6 @@ class CameraController:
                             blur = cv2.GaussianBlur(roi, (99, 99), 30)
                             anonymized_frame[y1:y2, x1:x2] = blur
                             heads_blurred += 1
-                            print(f"🔧 DEBUG anonymize_frame_logic: Zamazano głowę #{heads_blurred} (confidence: {confidence:.2f})")
-                
-                print(f"🔧 DEBUG anonymize_frame_logic: Łącznie zamazano {heads_blurred} głów")
             
             finally:
                 # Usuń tymczasowy plik
@@ -1319,20 +1225,16 @@ class CameraController:
             return anonymized_frame
             
         except Exception as e:
-            print(f"Error in anonymize_frame_logic: {e}")
-            import traceback
-            traceback.print_exc()
-            # W razie błędu zwróć oryginał
+            import logging
+            logging.error(f"Error in anonymize_frame_logic: {e}")
             return frame.copy()
 
     def __del__(self):
         """Czysty shutdown - zatrzymaj kamerę i workera"""
         self.stop_camera()
         
-        # Zatrzymaj AnonymizerWorker
         if hasattr(self, 'anonymizer_worker'):
-            print("🛑 Zatrzymywanie AnonymizerWorker...")
-            self.detection_queue.put(None)  # Sygnał zakończenia
+            self.detection_queue.put(None)
             self.anonymizer_worker.stop()
             self.anonymizer_worker.join(timeout=5)
 
@@ -1579,13 +1481,6 @@ class CameraController:
         """NOWA, SZYBKA metoda: Natychmiast zwraca zapisaną listę (bez skanowania)."""
         return self.available_cameras_list if hasattr(self, 'available_cameras_list') else []
 
-    @staticmethod
-    def scan_available_cameras():
-        """DEPRECATED: Używaj camera_controller.get_available_cameras() zamiast tego.
-        Zachowana dla kompatybilności wstecznej, ale nie powinna być używana w nowym kodzie."""
-        print("⚠️ OSTRZEŻENIE: scan_available_cameras() jest DEPRECATED. Użyj camera_controller.get_available_cameras()")
-        # Zwróć pustą listę - nie skanujemy tutaj
-        return []
 
     def find_camera_by_name(self, camera_name):
         """Find camera index by device name using Media Foundation API"""
@@ -2218,8 +2113,7 @@ class AnonymizerWorker(threading.Thread):
         self.is_running = False
 
 
-# Przykład użycia
 if __name__ == "__main__":
-    cameras = CameraController.scan_available_cameras()
+    cameras = CameraController._scan_available_cameras_static()
     for camera in cameras:
         print(f"Camera {camera['index']}: {camera['name']} ({camera['resolution']}, {camera['fps']} FPS)")
