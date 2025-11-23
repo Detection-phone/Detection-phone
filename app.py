@@ -70,8 +70,14 @@ print("=" * 60)
 # 1. YOLO Model dla detekcji telefonów
 print("INFO: Ładowanie modelu YOLO dla detekcji telefonów...")
 try:
-    GLOBAL_YOLO_MODEL_DETECTION = YOLO('yolov8s.pt')
-    logger.info("✅ YOLO model (detection) loaded successfully")
+    # Używamy yolov8m.pt (medium) zamiast yolov8s.pt dla lepszej dokładności wykrywania smartfonów
+    # Jeśli model nie istnieje, spróbuj fallback do yolov8s.pt
+    model_path = 'yolov8m.pt'
+    if not os.path.exists(model_path):
+        logger.warning(f"Model {model_path} nie znaleziony, próbuję yolov8s.pt...")
+        model_path = 'yolov8s.pt'
+    GLOBAL_YOLO_MODEL_DETECTION = YOLO(model_path)
+    logger.info(f"✅ YOLO model (detection) loaded successfully: {model_path}")
 except Exception as e:
     logger.error(f"❌ Error loading YOLO model (detection): {e}")
     GLOBAL_YOLO_MODEL_DETECTION = None

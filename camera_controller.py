@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env file (Email, Cloudinary, Vonage)
 load_dotenv()
 
-# MediaPipe nie wspiera Python 3.13 - używamy OpenCV DNN jako alternatywy
+
 
 # Imports for SMS notifications and Cloudinary
 from vonage import Auth
@@ -142,8 +142,9 @@ class CameraController:
 
         # Frame skipping configuration for performance optimization
         self.frame_counter = 0
-        # Będziemy analizować co 5. klatkę (dla 30 FPS = 6 detekcji na sekundę)
-        self.process_every_n_frame = 5
+        # Zmniejszono z 5 do 3 dla częstszej detekcji (dla 30 FPS = 10 detekcji na sekundę)
+        # To poprawia wykrywanie szybko poruszających się telefonów
+        self.process_every_n_frame = 3
         print(f"Frame skipping enabled: processing every {self.process_every_n_frame} frames")
         
         # Użyj przekazanej listy kamer (lub pusta lista jeśli nie przekazano)
@@ -802,6 +803,58 @@ class CameraController:
 
     # USUNIĘTE: process_detection_queue() - teraz robi to AnonymizerWorker asynchronicznie
 
+    def _enhance_frame_for_detection(self, frame):
+        """
+        Poprawia jakość obrazu przed detekcją smartfonów.
+        Zastosowane techniki:
+        - Zwiększenie kontrastu (CLAHE - Contrast Limited Adaptive Histogram Equalization)
+        - Wyostrzenie obrazu (unsharp masking)
+        - Opcjonalne zwiększenie rozdzielczości dla małych obiektów
+        
+        Args:
+            frame: numpy array (BGR image)
+            
+        Returns:
+            enhanced_frame: numpy array z ulepszonym obrazem
+        """
+        try:
+            enhanced = frame.copy()
+            
+            # 1. Konwersja do LAB i zwiększenie kontrastu tylko w kanale L (jasność)
+            # To poprawia wykrywanie telefonów w różnych warunkach oświetleniowych
+            lab = cv2.cvtColor(enhanced, cv2.COLOR_BGR2LAB)
+            l_channel, a, b = cv2.split(lab)
+            
+            # Zastosuj CLAHE (Contrast Limited Adaptive Histogram Equalization)
+            # CLAHE jest lepsze niż zwykłe histogram equalization, bo nie powoduje over-enhancement
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l_channel_enhanced = clahe.apply(l_channel)
+            
+            # Połącz z powrotem
+            lab_enhanced = cv2.merge([l_channel_enhanced, a, b])
+            enhanced = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
+            
+            # 2. Wyostrzenie obrazu (unsharp masking)
+            # To pomaga w wykrywaniu krawędzi telefonów
+            gaussian = cv2.GaussianBlur(enhanced, (0, 0), 2.0)
+            enhanced = cv2.addWeighted(enhanced, 1.5, gaussian, -0.5, 0)
+            
+            # 3. Opcjonalne zwiększenie rozdzielczości dla małych telefonów
+            # Zwiększamy tylko jeśli obraz jest mały (poniżej 640px szerokości)
+            h, w = enhanced.shape[:2]
+            if w < 640:
+                scale_factor = 640 / w
+                new_width = int(w * scale_factor)
+                new_height = int(h * scale_factor)
+                enhanced = cv2.resize(enhanced, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+            
+            return enhanced
+            
+        except Exception as e:
+            # W przypadku błędu, zwróć oryginalną klatkę
+            print(f"⚠️  Błąd podczas ulepszania obrazu: {e}, używam oryginalnej klatki")
+            return frame
+
     def _camera_loop(self):
         """Main camera loop for capturing and processing frames"""
         print("Starting camera loop...")
@@ -981,20 +1034,23 @@ class CameraController:
                 self.frame_counter += 1
                 
                 # --- KLUCZOWA LOGIKA POMIJANIA KLATEK ---
-                # Jeśli to nie jest co 5. klatka, przeskocz do następnej iteracji
-                # To pozwala na płynne działanie streamu, a detekcję wykonujemy tylko co 5. klatkę
+                # Jeśli to nie jest co 3. klatka, przeskocz do następnej iteracji
+                # To pozwala na płynne działanie streamu, a detekcję wykonujemy tylko co 3. klatkę (dla lepszej detekcji)
                 if self.frame_counter % self.process_every_n_frame != 0:
                     continue  # Pomiń detekcję dla tej klatki, ale stream działa normalnie
                 
-                # --- TEN KOD WYKONA SIĘ TERAZ TYLKO CO 5. KLATKĘ ---
-                # (Zakładając 30 FPS = 6 detekcji na sekundę)
+                # --- TEN KOD WYKONA SIĘ TERAZ TYLKO CO 3. KLATKĘ ---
+                # (Zakładając 30 FPS = 10 detekcji na sekundę)
                 if self.model is not None:
                     try:
                         # Validate display_frame exists and is valid before using
                         if display_frame is None or display_frame.size == 0:
                             continue
+                        
+                        # Preprocessing obrazu dla lepszej detekcji smartfonów
+                        enhanced_frame = self._enhance_frame_for_detection(frame)
                             
-                        results = self.model(frame, verbose=False)  # Używa ORYGINALNEJ klatki
+                        results = self.model(enhanced_frame, verbose=False)  # Używa ulepszonej klatki
                         # Pobierz wymiary klatki do normalizacji
                         frame_height, frame_width = frame.shape[:2]
                         
