@@ -11,7 +11,6 @@
                     <p class="text-muted">Login to your account</p>
                 </div>
                 
-                <!-- Flask Flash Messages -->
                 {% with messages = get_flashed_messages(with_categories=true) %}
                     {% if messages %}
                         {% for category, message in messages %}
@@ -23,7 +22,6 @@
                     {% endif %}
                 {% endwith %}
                 
-                <!-- Server-side Error Message -->
                 {% if error %}
                     <div class="alert alert-danger alert-dismissible fade show" role="alert">
                         {{ error }}
@@ -68,7 +66,6 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     const errorDiv = document.getElementById('loginError');
     const originalBtnText = submitBtn.innerHTML;
     
-    // Show loading state
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Logging in...';
     errorDiv.classList.add('d-none');
@@ -101,7 +98,6 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
             submitBtn.disabled = false;
             submitBtn.innerHTML = originalBtnText;
             
-            // Shake animation for error
             const form = document.getElementById('loginForm');
             form.classList.add('shake');
             setTimeout(() => form.classList.remove('shake'), 500);

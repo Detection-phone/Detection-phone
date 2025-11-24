@@ -2,10 +2,10 @@ from app import app, db, User, Settings, DEFAULT_SCHEDULE
 
 def init_db():
     with app.app_context():
-        # Create tables
+
         db.create_all()
         
-        # Create default settings if they don't exist
+
         settings = Settings.query.first()
         if not settings:
             settings = Settings(
@@ -25,10 +25,10 @@ def init_db():
         else:
             print("ℹ️  Settings already exist")
         
-        # Check if admin user exists
+
         admin = User.query.filter_by(username='admin').first()
         if not admin:
-            # Create admin user
+
             admin = User(username='admin')
             admin.set_password('admin')
             db.session.add(admin)

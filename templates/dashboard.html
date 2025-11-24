@@ -2,7 +2,6 @@
 
 {% block content %}
 <div class="row">
-    <!-- Statistics Cards -->
     <div class="col-md-4 mb-4">
         <div class="card bg-primary text-white">
             <div class="card-body">
@@ -29,7 +28,6 @@
     </div>
 </div>
 
-<!-- Recent Detections -->
 <div class="row mt-4">
     <div class="col-12">
         <div class="card">
@@ -49,7 +47,6 @@
                             </tr>
                         </thead>
                         <tbody id="detectionsTable">
-                            <!-- Detections will be loaded here -->
                         </tbody>
                     </table>
                 </div>
@@ -61,27 +58,22 @@
 
 {% block scripts %}
 <script>
-// Function to format date
 function formatDate(dateString) {
     const date = new Date(dateString);
     return date.toLocaleString();
 }
 
-// Function to update dashboard stats
 async function updateDashboardStats() {
     try {
         const response = await fetch('/api/dashboard-stats');
         const data = await response.json();
         
-        // Update statistics cards
         document.getElementById('totalDetections').textContent = data.total_detections;
         document.getElementById('todayDetections').textContent = data.today_detections;
         
-        // Update camera status with color
         const statusElement = document.getElementById('cameraStatus');
         statusElement.textContent = data.camera_status;
         
-        // Update the parent card color based on status
         const statusCard = statusElement.closest('.card');
         if (data.camera_status === 'Online') {
             statusCard.classList.remove('bg-warning', 'bg-danger');
@@ -94,7 +86,6 @@ async function updateDashboardStats() {
             statusCard.classList.add('bg-info');
         }
         
-        // Update recent detections table
         const tableBody = document.getElementById('detectionsTable');
         tableBody.innerHTML = '';
         
@@ -114,7 +105,6 @@ async function updateDashboardStats() {
             tableBody.appendChild(row);
         });
         
-        // Add subtle animation to indicate update
         document.querySelectorAll('.card').forEach(card => {
             card.style.transition = 'all 0.3s ease';
         });
@@ -124,15 +114,12 @@ async function updateDashboardStats() {
     }
 }
 
-// Function to view detection image
 function viewImage(imagePath) {
     window.open(`/detections/${imagePath}`, '_blank');
 }
 
-// Load stats when page loads
 document.addEventListener('DOMContentLoaded', updateDashboardStats);
 
-// Refresh dashboard stats every 3 seconds
 setInterval(updateDashboardStats, 3000);
 </script>
 {% endblock %} 

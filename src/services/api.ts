@@ -1,23 +1,23 @@
 import axios from 'axios';
 
-// Base URL for Flask API - używa proxy, więc puste = względne ścieżki
+
 const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
-// Create axios instance with default config
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
-  withCredentials: true, // Send cookies with requests for Flask session
+  withCredentials: true,
 });
 
-// Helper to expose base URL when needed by consumers
+
 export const getBaseUrl = (): string => API_BASE_URL;
-// Also attach for default export access (api.getBaseUrl())
+
 (api as any).getBaseUrl = getBaseUrl;
 
-// Add request interceptor for auth token
+
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('auth_token');
@@ -31,12 +31,12 @@ api.interceptors.request.use(
   }
 );
 
-// Response interceptor for error handling
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Unauthorized - clear auth and redirect to login
+
       localStorage.removeItem('auth_token');
       window.location.href = '/login';
     }
@@ -44,9 +44,9 @@ api.interceptors.response.use(
   }
 );
 
-// ========================
-// Authentication APIs
-// ========================
+
+
+
 
 export const authAPI = {
   login: async (username: string, password: string) => {
@@ -60,9 +60,9 @@ export const authAPI = {
   },
 };
 
-// ========================
-// Detection APIs
-// ========================
+
+
+
 
 export interface Detection {
   id: number;
@@ -114,9 +114,9 @@ export const detectionAPI = {
   },
 };
 
-// ========================
-// Dashboard Stats APIs
-// ========================
+
+
+
 
 export interface DashboardStats {
   total_detections: number;
@@ -135,9 +135,9 @@ export const dashboardAPI = {
   },
 };
 
-// ========================
-// Camera Control APIs
-// ========================
+
+
+
 
 export const cameraAPI = {
   start: async () => {
@@ -156,7 +156,7 @@ export const cameraAPI = {
   },
   
   getConfigSnapshot: async (): Promise<Blob> => {
-    // Dodajemy parametr 't' z aktualnym czasem, aby przełamać cache
+
     const response = await api.get(`/api/camera/config_snapshot?t=${Date.now()}`, {
       responseType: 'blob',
     });
@@ -164,9 +164,9 @@ export const cameraAPI = {
   },
 };
 
-// ========================
-// Settings APIs
-// ========================
+
+
+
 
 export interface CameraDevice {
   index: number;
@@ -177,8 +177,8 @@ export interface CameraDevice {
 
 export interface DaySchedule {
   enabled: boolean;
-  start: string; // HH:MM format
-  end: string; // HH:MM format
+  start: string;
+  end: string;
 }
 
 export interface WeeklySchedule {
@@ -192,9 +192,9 @@ export interface WeeklySchedule {
 }
 
 export interface Settings {
-  schedule?: WeeklySchedule; // New weekly schedule
-  camera_start_time?: string; // Legacy - kept for backward compatibility
-  camera_end_time?: string; // Legacy - kept for backward compatibility
+  schedule?: WeeklySchedule;
+  camera_start_time?: string;
+  camera_end_time?: string;
   blur_faces: boolean;
   confidence_threshold: number;
   camera_index: number;
@@ -202,8 +202,8 @@ export interface Settings {
   sms_notifications: boolean;
   email_notifications: boolean;
   anonymization_percent?: number;
-  roi_coordinates?: [number, number, number, number] | null; // Legacy single ROI
-  roi_zones?: ROIZone[]; // New multiple ROI zones
+  roi_coordinates?: [number, number, number, number] | null;
+  roi_zones?: ROIZone[];
   telegram_notifications?: boolean;
   available_cameras?: CameraDevice[];
   notifications?: {
@@ -217,10 +217,10 @@ export interface ROIZone {
   id: string;
   name: string;
   coords: {
-    x: number; // normalized 0-1
-    y: number; // normalized 0-1
-    w: number; // normalized 0-1
-    h: number; // normalized 0-1
+    x: number;
+    y: number;
+    w: number;
+    h: number;
   };
 }
 

@@ -10,7 +10,7 @@ const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
 export const ConfigProvider = ({ children }: { children: ReactNode }) => {
   const [configPhotoUrl, setConfigPhotoUrl] = useState<string | null>(null);
 
-  // Cleanup blob URL on unmount or when URL changes
+
   useEffect(() => {
     return () => {
       if (configPhotoUrl) {
@@ -19,9 +19,9 @@ export const ConfigProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [configPhotoUrl]);
 
-  // Wrapper function to handle cleanup when setting new URL
+
   const handleSetConfigPhotoUrl = (url: string | null) => {
-    // Revoke previous URL if exists
+
     if (configPhotoUrl) {
       URL.revokeObjectURL(configPhotoUrl);
     }

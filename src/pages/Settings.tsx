@@ -66,7 +66,7 @@ import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { pl } from 'date-fns/locale';
 import { Select, MenuItem, InputLabel } from '@mui/material';
 
-// Confidence threshold marks
+
 const confidenceMarks = [
   { value: 0, label: '0%' },
   { value: 20, label: '20%' },
@@ -76,7 +76,7 @@ const confidenceMarks = [
   { value: 100, label: '100%' },
 ];
 
-// Helper: Convert time string (HH:MM) to Date
+
 const timeStringToDate = (timeStr: string): Date => {
   const [hours, minutes] = timeStr.split(':').map(Number);
   const date = new Date();
@@ -84,18 +84,18 @@ const timeStringToDate = (timeStr: string): Date => {
   return date;
 };
 
-// Helper: Convert Date to time string (HH:MM)
+
 const dateToTimeString = (date: Date): string => {
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
 };
 
-// Type for weekly schedule
+
 type DaySchedule = {
   enabled: boolean;
-  start: string; // HH:MM format
-  end: string; // HH:MM format
+  start: string;
+  end: string;
 };
 
 type WeeklySchedule = {
@@ -108,7 +108,7 @@ type WeeklySchedule = {
   sunday: DaySchedule;
 };
 
-// Default schedule structure
+
 const DEFAULT_SCHEDULE: WeeklySchedule = {
   monday: { enabled: true, start: '07:00', end: '16:00' },
   tuesday: { enabled: true, start: '07:00', end: '16:00' },
@@ -152,14 +152,14 @@ const Settings: React.FC = () => {
   });
   const [expanded, setExpanded] = useState<string | false>('schedule');
 
-  // ROI state
+
   const [isRoiExpanded, setIsRoiExpanded] = useState(false);
 
-  // Config photo state (for ROI configuration) - using global context
+
   const { configPhotoUrl, setConfigPhotoUrl } = useConfig();
   const [isLoadingPhoto, setIsLoadingPhoto] = useState(false);
 
-  // New ROI zones state
+
   const [drawingMode, setDrawingMode] = useState<'none' | 'single' | 'grid' | 'edit'>('none');
   const [currentRect, setCurrentRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [savedROIs, setSavedROIs] = useState<ROIZone[]>([]);
@@ -170,7 +170,7 @@ const Settings: React.FC = () => {
   const [gridNamingOrder, setGridNamingOrder] = useState<'rows-cols' | 'cols-rows'>('rows-cols');
   const [gridNamingMode, setGridNamingMode] = useState<'sequential' | 'grid'>('sequential');
   
-  // Drawing state
+
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [drawEnd, setDrawEnd] = useState<{ x: number; y: number } | null>(null);
@@ -178,7 +178,7 @@ const Settings: React.FC = () => {
   const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
   const [editingZoneName, setEditingZoneName] = useState<string>('');
   
-  // ROI editing state
+
   const [selectedROIId, setSelectedROIId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
@@ -186,35 +186,35 @@ const Settings: React.FC = () => {
   const [resizeHandle, setResizeHandle] = useState<'nw' | 'ne' | 'sw' | 'se' | null>(null);
   const [resizeStart, setResizeStart] = useState<{ x: number; y: number; coords: { x: number; y: number; w: number; h: number } } | null>(null);
   
-  // Dialog state
+
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   
-  // Autosave state
+
   const autosaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   const imgRef = React.useRef<HTMLImageElement | null>(null);
   const wrapperRef = React.useRef<HTMLDivElement | null>(null);
 
-  // Fetch settings and camera status on mount
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         const fetchedSettings = await settingsAPI.get();
         
-        // Set available cameras (ensure it's always an array)
+
         if (fetchedSettings.available_cameras && Array.isArray(fetchedSettings.available_cameras)) {
           setAvailableCameras(fetchedSettings.available_cameras);
         } else {
           setAvailableCameras([]);
         }
         
-        // Handle schedule - check for new weekly schedule or fallback to old format
+
         let schedule = DEFAULT_SCHEDULE;
         if ((fetchedSettings as any).schedule) {
-          // New weekly schedule format
+
           schedule = (fetchedSettings as any).schedule as WeeklySchedule;
         } else if ((fetchedSettings as any).camera_start_time && (fetchedSettings as any).camera_end_time) {
-          // Legacy format - convert to weekly schedule (Mon-Fri enabled)
+
           const startTime = (fetchedSettings as any).camera_start_time;
           const endTime = (fetchedSettings as any).camera_end_time;
           schedule = {
@@ -234,31 +234,31 @@ const Settings: React.FC = () => {
           anonymizationPercent: fetchedSettings.anonymization_percent ?? 50,
           emailEnabled: fetchedSettings.email_notifications || fetchedSettings.notifications?.email || false,
           smsEnabled: fetchedSettings.sms_notifications || fetchedSettings.notifications?.sms || false,
-          confidenceThreshold: Math.round(fetchedSettings.confidence_threshold * 100), // Convert 0-1 to 0-100
+          confidenceThreshold: Math.round(fetchedSettings.confidence_threshold * 100),
           cameraIndex: fetchedSettings.camera_index || 0,
           cameraName: fetchedSettings.camera_name || 'Camera 1',
           roi: (fetchedSettings as any).roi_coordinates || null,
         });
 
-        // Fetch camera status
+
         const status = await cameraAPI.getStatus();
         setCameraStatus({
           isRunning: status.is_running,
           withinSchedule: status.within_schedule,
         });
 
-        // Fetch ROI zones
-        // ✅ FIXED: Ensure savedROIs is always an array
+
+
         if (fetchedSettings.roi_zones && Array.isArray(fetchedSettings.roi_zones)) {
           setSavedROIs(fetchedSettings.roi_zones);
         } else {
-          // Try to fetch from dedicated endpoint
+
           try {
             const roiZones = await settingsAPI.getROIZones();
             setSavedROIs(Array.isArray(roiZones) ? roiZones : []);
           } catch (error) {
             console.error('Error fetching ROI zones:', error);
-            // ✅ FIXED: Set empty array on error to prevent undefined
+
             setSavedROIs([]);
           }
         }
@@ -277,7 +277,7 @@ const Settings: React.FC = () => {
     fetchData();
   }, []);
 
-  // Handle loading config photo
+
   const handleLoadConfigPhoto = async () => {
     setIsLoadingPhoto(true);
     setConfigPhotoUrl(null);
@@ -298,7 +298,7 @@ const Settings: React.FC = () => {
     }
   };
 
-  // Note: Cleanup blob URL is now handled in ConfigContext
+
 
   const handleAccordionChange = (panel: string) => (_event: React.SyntheticEvent, isExpanded: boolean) => {
     setExpanded(isExpanded ? panel : false);
@@ -307,11 +307,11 @@ const Settings: React.FC = () => {
   const handleSave = async () => {
     setLoading(true);
     try {
-      // Convert to API format
+
       const payload = {
-        schedule: settings.schedule, // Weekly schedule object
+        schedule: settings.schedule,
         blur_faces: settings.blurFaces,
-        confidence_threshold: settings.confidenceThreshold / 100, // Convert 0-100 to 0-1
+        confidence_threshold: settings.confidenceThreshold / 100,
         anonymization_percent: settings.anonymizationPercent,
         camera_index: settings.cameraIndex,
         camera_name: settings.cameraName,
@@ -324,7 +324,7 @@ const Settings: React.FC = () => {
 
       const response = await settingsAPI.update(payload);
       
-      // Update camera status from response
+
       if (response.camera_status) {
         setCameraStatus({
           isRunning: response.camera_status.is_running,
@@ -349,7 +349,7 @@ const Settings: React.FC = () => {
     }
   };
 
-  // ROI drawing helpers
+
   const getRelativeCoords = (e: React.MouseEvent) => {
     const rect = wrapperRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0, width: 0, height: 0 };
@@ -358,7 +358,7 @@ const Settings: React.FC = () => {
     return { x, y, width: rect.width, height: rect.height };
   };
 
-  // Check if point is inside ROI
+
   const isPointInROI = (x: number, y: number, roi: ROIZone, width: number, height: number): boolean => {
     const roiX = roi.coords.x * width;
     const roiY = roi.coords.y * height;
@@ -367,7 +367,7 @@ const Settings: React.FC = () => {
     return x >= roiX && x <= roiX + roiW && y >= roiY && y <= roiY + roiH;
   };
 
-  // Check if point is in resize handle
+
   const getResizeHandle = (x: number, y: number, roi: ROIZone, width: number, height: number): 'nw' | 'ne' | 'sw' | 'se' | null => {
     const handleSize = 8;
     const roiX = roi.coords.x * width;
@@ -375,7 +375,7 @@ const Settings: React.FC = () => {
     const roiW = roi.coords.w * width;
     const roiH = roi.coords.h * height;
 
-    // Check corners
+
     if (Math.abs(x - roiX) < handleSize && Math.abs(y - roiY) < handleSize) return 'nw';
     if (Math.abs(x - (roiX + roiW)) < handleSize && Math.abs(y - roiY) < handleSize) return 'ne';
     if (Math.abs(x - roiX) < handleSize && Math.abs(y - (roiY + roiH)) < handleSize) return 'sw';
@@ -389,7 +389,7 @@ const Settings: React.FC = () => {
     
     const { x, y, width, height } = getRelativeCoords(e);
     
-    // Check if clicking on a resize handle
+
     if (selectedROIId) {
       const selectedROI = savedROIs.find(r => r.id === selectedROIId);
       if (selectedROI) {
@@ -404,7 +404,7 @@ const Settings: React.FC = () => {
       }
     }
     
-    // Check if clicking on an existing ROI
+
     let clickedROI: ROIZone | null = null;
     for (const roi of savedROIs) {
       if (isPointInROI(x, y, roi, width, height)) {
@@ -425,7 +425,7 @@ const Settings: React.FC = () => {
       }
     }
     
-    // Start drawing new ROI (only if not in edit mode and not clicking on existing ROI)
+
     if ((drawingMode === 'single' || drawingMode === 'grid') && !clickedROI) {
       setIsDrawing(true);
       setDrawStart({ x, y });
@@ -438,7 +438,7 @@ const Settings: React.FC = () => {
     
     const { x, y, width, height } = getRelativeCoords(e);
     
-    // Handle resizing
+
     if (isResizing && resizeHandle && resizeStart && selectedROIId) {
       const deltaX = (x - resizeStart.x) / width;
       const deltaY = (y - resizeStart.y) / height;
@@ -469,7 +469,7 @@ const Settings: React.FC = () => {
           break;
       }
       
-      // Ensure coordinates stay within bounds
+
       newCoords.x = Math.max(0, Math.min(1, newCoords.x));
       newCoords.y = Math.max(0, Math.min(1, newCoords.y));
       newCoords.w = Math.max(0.01, Math.min(1 - newCoords.x, newCoords.w));
@@ -481,7 +481,7 @@ const Settings: React.FC = () => {
       return;
     }
     
-    // Handle dragging
+
     if (isDragging && dragStart && selectedROIId) {
       const deltaX = (x - dragStart.x) / width;
       const deltaY = (y - dragStart.y) / height;
@@ -491,7 +491,7 @@ const Settings: React.FC = () => {
         let newX = selectedROI.coords.x + deltaX;
         let newY = selectedROI.coords.y + deltaY;
         
-        // Keep within bounds
+
         newX = Math.max(0, Math.min(1 - selectedROI.coords.w, newX));
         newY = Math.max(0, Math.min(1 - selectedROI.coords.h, newY));
         
@@ -505,7 +505,7 @@ const Settings: React.FC = () => {
       return;
     }
     
-    // Handle drawing new ROI
+
     if (isDrawing && drawStart && (drawingMode === 'single' || drawingMode === 'grid')) {
       setDrawEnd({ x, y });
     }
@@ -535,7 +535,7 @@ const Settings: React.FC = () => {
     const x2 = Math.max(drawStart.x, drawEnd.x) / width;
     const y2 = Math.max(drawStart.y, drawEnd.y) / height;
 
-    // Normalize coordinates (0-1)
+
     const normalizedRect = {
       x: Math.max(0, Math.min(1, x1)),
       y: Math.max(0, Math.min(1, y1)),
@@ -544,7 +544,7 @@ const Settings: React.FC = () => {
     };
 
     if (normalizedRect.w < 0.01 || normalizedRect.h < 0.01) {
-      // Too small, ignore
+
       setIsDrawing(false);
       setDrawStart(null);
       setDrawEnd(null);
@@ -597,33 +597,33 @@ const Settings: React.FC = () => {
     const cellWidth = gridGeneratorRect.w / numCols;
     const cellHeight = gridGeneratorRect.h / numRows;
     
-    // Counter for sequential naming mode - start from existing ROIs count + 1
+
     let counter = savedROIs.length + 1;
     
-    // Get prefix from text field (e.g. 'ławka')
+
     const prefix = gridPrefix.trim();
-    const prefixText = prefix ? `${prefix} ` : ''; // Add space if prefix is not empty
+    const prefixText = prefix ? `${prefix} ` : '';
 
     for (let r = 0; r < numRows; r++) {
       for (let c = 0; c < numCols; c++) {
         const cellX = gridGeneratorRect.x + (c * cellWidth);
         const cellY = gridGeneratorRect.y + (r * cellHeight);
         
-        // Generate name based on naming mode
+
         let name: string;
         if (gridNamingMode === 'sequential') {
-          // Sequential mode: "Ławka 1", "Ławka 2", etc.
+
           name = `${prefixText}${counter}`;
           counter++;
         } else {
-          // Grid mode: "R1-M1" or "M1-R1" based on naming order
+
           if (gridNamingOrder === 'rows-cols') {
             name = `R${r + 1}-M${c + 1}`;
           } else {
             name = `M${c + 1}-R${r + 1}`;
           }
           
-          // Add prefix if provided
+
           if (gridPrefix.trim()) {
             name = `${gridPrefix.trim()}-${name}`;
           }
@@ -701,31 +701,31 @@ const Settings: React.FC = () => {
     }
   };
 
-  // Autosave function with debounce
+
   const lastSavedROIsRef = useRef<ROIZone[]>([]);
   useEffect(() => {
-    // Skip autosave on initial load
+
     if (initialLoad) {
       lastSavedROIsRef.current = savedROIs;
       return;
     }
 
-    // Skip if nothing changed
+
     if (JSON.stringify(lastSavedROIsRef.current) === JSON.stringify(savedROIs)) {
       return;
     }
 
-    // Clear existing timeout
+
     if (autosaveTimeoutRef.current) {
       clearTimeout(autosaveTimeoutRef.current);
     }
 
-    // Set new timeout for autosave
+
     autosaveTimeoutRef.current = setTimeout(async () => {
       try {
         await settingsAPI.saveROIZones(savedROIs);
         lastSavedROIsRef.current = savedROIs;
-        // Show subtle autosave notification (only when actually saved)
+
         setSnackbar({
           open: true,
           message: 'Ustawienia zapisane automatycznie',
@@ -734,11 +734,11 @@ const Settings: React.FC = () => {
         } as typeof snackbar);
       } catch (error) {
         console.error('Autosave error:', error);
-        // Don't show error for autosave failures
-      }
-    }, 2000); // 2 second delay
 
-    // Cleanup
+      }
+    }, 2000);
+
+
     return () => {
       if (autosaveTimeoutRef.current) {
         clearTimeout(autosaveTimeoutRef.current);
@@ -837,7 +837,7 @@ const Settings: React.FC = () => {
     }
   };
 
-  // ✅ Schedule Quick Select Handlers
+
   const handleSet247 = () => {
     const schedule24_7: WeeklySchedule = {
       monday: { enabled: true, start: '00:00', end: '23:59' },
@@ -907,7 +907,7 @@ const Settings: React.FC = () => {
     });
   };
   
-  // Helper to update a single day's schedule
+
   const updateDaySchedule = (day: keyof WeeklySchedule, field: keyof DaySchedule, value: boolean | string) => {
     setSettings({
       ...settings,
@@ -921,7 +921,7 @@ const Settings: React.FC = () => {
     });
   };
   
-  // Helper to convert time string (HH:MM) to Date for TimePicker
+
   const timeStringToDatePicker = (timeStr: string): Date => {
     const [hours, minutes] = timeStr.split(':').map(Number);
     const date = new Date();
@@ -929,7 +929,7 @@ const Settings: React.FC = () => {
     return date;
   };
   
-  // Helper to convert Date from TimePicker to time string (HH:MM)
+
   const datePickerToTimeString = (date: Date | null): string => {
     if (!date) return '00:00';
     const hours = String(date.getHours()).padStart(2, '0');
@@ -937,7 +937,7 @@ const Settings: React.FC = () => {
     return `${hours}:${minutes}`;
   };
 
-  // Show loading spinner on initial load
+
   if (initialLoad) {
     return (
       <Box
@@ -955,7 +955,7 @@ const Settings: React.FC = () => {
 
   return (
     <Box>
-      {/* Header */}
+      {}
       <Paper
         sx={{
           p: 3,
@@ -989,7 +989,7 @@ const Settings: React.FC = () => {
         </Box>
       </Paper>
 
-      {/* Camera Control Section */}
+      {}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -1029,7 +1029,7 @@ const Settings: React.FC = () => {
         </Box>
       </Paper>
 
-      {/* Camera Schedule Section */}
+      {}
       <Accordion
         expanded={expanded === 'schedule'}
         onChange={handleAccordionChange('schedule')}
@@ -1050,7 +1050,7 @@ const Settings: React.FC = () => {
         </AccordionSummary>
         <AccordionDetails>
           <Stack spacing={2}>
-            {/* Preset buttons */}
+            {}
             <Stack direction="row" spacing={1} flexWrap="wrap">
               <Chip 
                 label="24/7" 
@@ -1080,7 +1080,7 @@ const Settings: React.FC = () => {
             
             <Divider />
             
-            {/* 7-day schedule grid */}
+            {}
             <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={pl}>
               <Grid container spacing={2}>
                 {(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const).map((day) => {
@@ -1091,19 +1091,19 @@ const Settings: React.FC = () => {
                     <Grid item xs={12} key={day}>
                       <Paper variant="outlined" sx={{ p: 2 }}>
                         <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
-                          {/* Checkbox for enabled */}
+                          {}
                           <Checkbox
                             checked={dayConfig.enabled}
                             onChange={(e) => updateDaySchedule(day, 'enabled', e.target.checked)}
                             size="small"
                           />
                           
-                          {/* Day label */}
+                          {}
                           <Typography variant="body2" sx={{ minWidth: 80, fontWeight: 500 }}>
                             {dayLabel}
                           </Typography>
                           
-                          {/* Start time picker */}
+                          {}
                           <TimePicker
                             label="Start"
                             value={timeStringToDatePicker(dayConfig.start)}
@@ -1125,7 +1125,7 @@ const Settings: React.FC = () => {
                             to
                           </Typography>
                           
-                          {/* End time picker */}
+                          {}
                           <TimePicker
                             label="End"
                             value={timeStringToDatePicker(dayConfig.end)}
@@ -1153,7 +1153,7 @@ const Settings: React.FC = () => {
         </AccordionDetails>
       </Accordion>
 
-      {/* Detection Settings Section */}
+      {}
       <Accordion
         expanded={expanded === 'detection'}
         onChange={handleAccordionChange('detection')}
@@ -1217,9 +1217,9 @@ const Settings: React.FC = () => {
         </AccordionDetails>
       </Accordion>
 
-      {/* ================================================================== */}
-      {/* NOWA SEKCJA ROI - System Stref */}
-      {/* ================================================================== */}
+      {}
+      {}
+      {}
       <Accordion
         expanded={isRoiExpanded}
         sx={{ mb: 2 }}
@@ -1245,7 +1245,7 @@ const Settings: React.FC = () => {
               Załaduj obraz konfiguracyjny sali, a następnie użyj narzędzi do definiowania stref. Możesz rysować pojedyncze strefy lub generować siatkę (grid) automatycznie.
             </Typography>
 
-            {/* Przycisk do ładowania zdjęcia */}
+            {}
             {!configPhotoUrl && !isLoadingPhoto && (
               <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
                 <Button
@@ -1260,17 +1260,17 @@ const Settings: React.FC = () => {
               </Box>
             )}
 
-            {/* Loading indicator */}
+            {}
             {isLoadingPhoto && (
               <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
                 <CircularProgress />
               </Box>
             )}
 
-            {/* Panel narzędzi i obraz konfiguracyjny */}
+            {}
             {configPhotoUrl && (
               <Grid container spacing={2}>
-                {/* Panel narzędzi */}
+                {}
                 <Grid item xs={12} md={3}>
                   <Paper sx={{ p: 2 }}>
                     <Typography variant="h6" sx={{ mb: 2, fontSize: '1rem' }}>
@@ -1329,7 +1329,7 @@ const Settings: React.FC = () => {
                       </Button>
                     </Stack>
 
-                    {/* Formularz dla pojedynczej strefy */}
+                    {}
                     {currentRect && drawingMode === 'single' && (
                       <Box sx={{ mt: 3, p: 2, bgcolor: 'background.default', borderRadius: 1 }}>
                         <Typography variant="subtitle2" sx={{ mb: 1 }}>
@@ -1355,7 +1355,7 @@ const Settings: React.FC = () => {
                       </Box>
                     )}
 
-                    {/* Formularz dla generatora siatki */}
+                    {}
                     {gridGeneratorRect && drawingMode === 'grid' && (
                       <Box sx={{ mt: 3, p: 2, bgcolor: 'background.default', borderRadius: 1 }}>
                         <Typography variant="subtitle2" sx={{ mb: 2 }}>
@@ -1451,7 +1451,7 @@ const Settings: React.FC = () => {
                       </Box>
                     )}
 
-                    {/* Lista zapisanych stref */}
+                    {}
                     {savedROIs.length > 0 && (
                       <Box sx={{ mt: 3 }}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
@@ -1534,7 +1534,7 @@ const Settings: React.FC = () => {
                   </Paper>
                 </Grid>
 
-                {/* Obraz konfiguracyjny z rysowaniem */}
+                {}
                 <Grid item xs={12} md={9}>
                   <Box
                     ref={wrapperRef}
@@ -1565,7 +1565,7 @@ const Settings: React.FC = () => {
                 }
               }}
             >
-                    {/* Statyczny obraz konfiguracyjny */}
+                    {}
                   <img
                       ref={imgRef}
                       src={configPhotoUrl}
@@ -1578,7 +1578,7 @@ const Settings: React.FC = () => {
                     }}
                   />
 
-              {/* Narysowany prostokąt (w trakcie) */}
+              {}
                     {isDrawing && drawStart && drawEnd && wrapperRef.current && (
                 <div
                   style={{
@@ -1594,7 +1594,7 @@ const Settings: React.FC = () => {
                 />
               )}
 
-                    {/* Zapisane strefy ROI */}
+                    {}
                     {wrapperRef.current && savedROIs.map((zone) => {
                       const rect = wrapperRef.current?.getBoundingClientRect();
                       if (!rect) return null;
@@ -1638,10 +1638,10 @@ const Settings: React.FC = () => {
                             {zone.name}
                           </Typography>
                           
-                          {/* Resize handles */}
+                          {}
                           {isSelected && canEdit && (
                             <>
-                              {/* NW corner */}
+                              {}
                               <div
                                 style={{
                                   position: 'absolute',
@@ -1655,7 +1655,7 @@ const Settings: React.FC = () => {
                                   cursor: 'nw-resize',
                                 }}
                               />
-                              {/* NE corner */}
+                              {}
                               <div
                                 style={{
                                   position: 'absolute',
@@ -1669,7 +1669,7 @@ const Settings: React.FC = () => {
                                   cursor: 'ne-resize',
                                 }}
                               />
-                              {/* SW corner */}
+                              {}
                               <div
                                 style={{
                                   position: 'absolute',
@@ -1683,7 +1683,7 @@ const Settings: React.FC = () => {
                                   cursor: 'sw-resize',
                                 }}
                               />
-                              {/* SE corner */}
+                              {}
                               <div
                                 style={{
                                   position: 'absolute',
@@ -1703,7 +1703,7 @@ const Settings: React.FC = () => {
                       );
                     })}
 
-                    {/* Podgląd prostokąta dla pojedynczej strefy */}
+                    {}
                     {currentRect && !isDrawing && wrapperRef.current && (
                       <div
                         style={{
@@ -1719,7 +1719,7 @@ const Settings: React.FC = () => {
                 />
               )}
 
-                    {/* Podgląd prostokąta dla generatora siatki */}
+                    {}
                     {gridGeneratorRect && !isDrawing && wrapperRef.current && (
                       <>
                         <div
@@ -1734,7 +1734,7 @@ const Settings: React.FC = () => {
                             pointerEvents: 'none',
                           }}
                         />
-                        {/* Podgląd siatki - linie pionowe */}
+                        {}
                         {Array.from({ length: numCols - 1 }).map((_, i) => {
                           const cellWidth = gridGeneratorRect.w / numCols;
                           return (
@@ -1752,7 +1752,7 @@ const Settings: React.FC = () => {
                             />
                           );
                         })}
-                        {/* Podgląd siatki - linie poziome */}
+                        {}
                         {Array.from({ length: numRows - 1 }).map((_, i) => {
                           const cellHeight = gridGeneratorRect.h / numRows;
                           return (
@@ -1774,7 +1774,7 @@ const Settings: React.FC = () => {
                     )}
             </Box>
 
-                  {/* Przycisk do ponownego załadowania */}
+                  {}
                   <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
                     <Button
                       variant="outlined"
@@ -1789,7 +1789,7 @@ const Settings: React.FC = () => {
               </Grid>
             )}
 
-            {/* Przycisk zapisu do backendu */}
+            {}
             {savedROIs.length > 0 && (
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', pt: 2 }}>
                 <LoadingButton
@@ -1807,7 +1807,7 @@ const Settings: React.FC = () => {
         </AccordionDetails>
       </Accordion>
 
-      {/* Privacy Settings Section */}
+      {}
       <Accordion
         expanded={expanded === 'privacy'}
         onChange={handleAccordionChange('privacy')}
@@ -1848,7 +1848,7 @@ const Settings: React.FC = () => {
         </AccordionDetails>
       </Accordion>
 
-      {/* Camera Selection Section */}
+      {}
       <Accordion
         expanded={expanded === 'camera'}
         onChange={handleAccordionChange('camera')}
@@ -1918,7 +1918,7 @@ const Settings: React.FC = () => {
         </AccordionDetails>
       </Accordion>
 
-      {/* Notification Settings Section */}
+      {}
       <Accordion
         expanded={expanded === 'notifications'}
         onChange={handleAccordionChange('notifications')}
@@ -1987,7 +1987,7 @@ const Settings: React.FC = () => {
         </AccordionDetails>
       </Accordion>
 
-      {/* Action Buttons */}
+      {}
       <Paper sx={{ p: 3, mt: 3 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
           <Button
@@ -2011,7 +2011,7 @@ const Settings: React.FC = () => {
         </Box>
       </Paper>
 
-      {/* Reset Dialog */}
+      {}
       <Dialog
         open={resetDialogOpen}
         onClose={() => setResetDialogOpen(false)}
@@ -2036,7 +2036,7 @@ const Settings: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar for Feedback */}
+      {}
       <Snackbar
         open={snackbar.open}
         autoHideDuration={snackbar.autoHideDuration || 4000}

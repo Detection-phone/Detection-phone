@@ -12,7 +12,6 @@
             </div>
             <div class="card-body">
                 <form id="settingsForm">
-                    <!-- Camera Schedule -->
                     <div class="mb-4 p-3 border border-secondary rounded">
                         <h6 class="mb-3">
                             <i class="fas fa-clock me-2 text-primary"></i>Camera Schedule
@@ -37,7 +36,6 @@
                         </div>
                     </div>
 
-                    <!-- Detection Settings -->
                     <div class="mb-4 p-3 border border-secondary rounded">
                         <h6 class="mb-3">
                             <i class="fas fa-radar me-2 text-warning"></i>Detection Settings
@@ -66,7 +64,6 @@
                         </div>
                     </div>
 
-                    <!-- Notification Settings -->
                     <div class="mb-4 p-3 border border-secondary rounded">
                         <h6 class="mb-3">
                             <i class="fas fa-bell me-2 text-success"></i>Notification Settings
@@ -85,7 +82,6 @@
                         </div>
                     </div>
 
-                    <!-- Camera Selection -->
                     <div class="mb-4 p-3 border border-secondary rounded">
                         <h6 class="mb-3">
                             <i class="fas fa-video me-2 text-info"></i>Camera Selection
@@ -95,7 +91,6 @@
                                 <i class="fas fa-camera me-1"></i>Select Camera Device:
                             </label>
                             <select id="camera-select" class="form-control form-select">
-                                <!-- Will be populated dynamically -->
                             </select>
                         </div>
                     </div>
@@ -121,7 +116,6 @@
 
 {% block scripts %}
 <script>
-// Function to populate camera select
 function populateCameraSelect(cameras) {
     const select = document.getElementById('camera-select');
     select.innerHTML = '';
@@ -134,18 +128,15 @@ function populateCameraSelect(cameras) {
     });
 }
 
-// Function to load settings
 function loadSettings() {
     fetch('/api/settings')
         .then(response => response.json())
         .then(data => {
-            // Populate camera select
             if (data.available_cameras) {
                 populateCameraSelect(data.available_cameras);
                 document.getElementById('camera-select').value = data.camera_index;
             }
             
-            // Update form fields
             document.getElementById('cameraStartTime').value = data.camera_start_time;
             document.getElementById('cameraEndTime').value = data.camera_end_time;
             document.getElementById('confidenceThreshold').value = data.confidence_threshold * 100;
@@ -157,12 +148,10 @@ function loadSettings() {
         .catch(error => console.error('Error loading settings:', error));
 }
 
-// Function to update confidence value display
 document.getElementById('confidenceThreshold').addEventListener('input', (e) => {
     document.getElementById('confidenceValue').textContent = `${e.target.value}%`;
 });
 
-// Function to handle form submission
 document.getElementById('settingsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     
@@ -171,7 +160,6 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
     const errorDiv = document.getElementById('settingsError');
     const originalBtnText = submitBtn.innerHTML;
     
-    // Show loading state
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Saving...';
     successDiv.classList.add('d-none');
@@ -218,7 +206,6 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
     }
 });
 
-// Load settings when page loads
 document.addEventListener('DOMContentLoaded', loadSettings);
 </script>
 {% endblock %} 

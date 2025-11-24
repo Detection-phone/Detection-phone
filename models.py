@@ -6,7 +6,7 @@ import json
 
 db = SQLAlchemy()
 
-# Default weekly schedule structure (Mon-Fri 7:00-16:00, weekends off)
+
 DEFAULT_SCHEDULE = {
     'monday': {'enabled': True, 'start': '07:00', 'end': '16:00'},
     'tuesday': {'enabled': True, 'start': '07:00', 'end': '16:00'},
@@ -41,11 +41,11 @@ class Detection(db.Model):
 
 class Settings(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    # SQLite stores JSON as TEXT; SQLAlchemy's JSON type handles conversion
+
     schedule = db.Column(db.JSON, nullable=False, default=lambda: DEFAULT_SCHEDULE)
-    # ROI zones: list of objects with id, name, coords {x, y, w, h} (normalized 0-1)
+
     roi_zones = db.Column(db.JSON, nullable=False, default=lambda: [])
-    # Additional settings stored as JSON (blur_faces, confidence_threshold, camera_index, etc.)
+
     config = db.Column(db.JSON, nullable=False, default=lambda: {
         'blur_faces': True,
         'confidence_threshold': 0.2,

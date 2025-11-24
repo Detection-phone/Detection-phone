@@ -47,7 +47,6 @@ import { detectionAPI, Detection } from '../services/api';
 import { handleDownloadImage } from '../utils/download';
 
 const Detections: React.FC = () => {
-  // ✅ FIXED: Real state with API data
   const [detections, setDetections] = useState<Detection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,12 +65,11 @@ const Detections: React.FC = () => {
     severity: 'success' | 'error';
   }>({ open: false, message: '', severity: 'success' });
 
-  // ✅ FIXED: Fetch detections from API with pagination
   useEffect(() => {
     fetchDetections();
     const intervalId = setInterval(() => {
       fetchDetections();
-    }, 20000); // 20s polling to keep list fresh
+    }, 20000);
     return () => clearInterval(intervalId);
   }, [page]);
 
@@ -79,21 +77,18 @@ const Detections: React.FC = () => {
     try {
       setLoading(true);
       const response = await detectionAPI.getAll(page, 20);
-      // ✅ FIXED: Ensure detections is always an array
       setDetections(response.detections || []);
       setTotalPages(response.total_pages || 0);
       setError(null);
     } catch (err: any) {
       console.error('❌ Failed to fetch detections:', err);
       setError('Failed to load detections. Please try again.');
-      // ✅ FIXED: Set empty array on error to prevent undefined
       setDetections([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Navigate to previous/next detection in the current list
   const handlePrev = () => {
     if (!selectedDetection) return;
     const idx = detections.findIndex((d) => d.id === selectedDetection.id);
@@ -121,7 +116,6 @@ const Detections: React.FC = () => {
     setOpenDialog(true);
   };
 
-  // ✅ FIXED: Real download handler
   const handleDownload = async (detection: Detection) => {
     try {
       await handleDownloadImage(detection.image_path);
@@ -132,18 +126,15 @@ const Detections: React.FC = () => {
     }
   };
 
-  // ✅ FIXED: Real delete handler
   const handleDelete = async (detection: Detection) => {
     if (!window.confirm(`Delete detection from ${detection.timestamp}?`)) {
       return;
     }
 
     try {
-      // Optimistic UI: remove immediately
       const backup = detections;
       setDetections(prev => prev.filter(d => d.id !== detection.id));
       await detectionAPI.delete(detection.id);
-      // Ensure sync with server state
       await fetchDetections();
       
       setSnackbar({
@@ -153,7 +144,6 @@ const Detections: React.FC = () => {
       });
     } catch (error) {
       console.error('❌ Delete failed:', error);
-      // Re-sync state if deletion fails
       await fetchDetections();
       setSnackbar({
         open: true,
@@ -163,7 +153,6 @@ const Detections: React.FC = () => {
     }
   };
 
-  // Batch selection handlers
   const handleToggleSelection = (detectionId: number) => {
     setSelectedDetections(prev => {
       const newSet = new Set(prev);
@@ -182,7 +171,6 @@ const Detections: React.FC = () => {
       const allIds = new Set(detections.map(d => d.id));
       setSelectedDetections(allIds);
     } else {
-      // Usuń tylko ID z aktualnej strony
       const currentPageIds = new Set(detections.map(d => d.id));
       setSelectedDetections(prev => {
         const newSet = new Set(prev);
@@ -192,7 +180,6 @@ const Detections: React.FC = () => {
     }
   };
 
-  // Automatycznie aktualizuj isSelectAll gdy zmienia się selectedDetections
   useEffect(() => {
     if (detections.length === 0) {
       setIsSelectAll(false);
@@ -203,13 +190,11 @@ const Detections: React.FC = () => {
     setIsSelectAll(allSelected);
   }, [selectedDetections, detections]);
 
-  // Wyczyść zaznaczenie przy zmianie strony
   useEffect(() => {
     setSelectedDetections(new Set());
     setIsSelectAll(false);
   }, [page]);
 
-  // Batch delete handler
   const handleDeleteSelected = async () => {
     const idsToDelete = Array.from(selectedDetections);
     if (idsToDelete.length === 0) return;
@@ -217,10 +202,8 @@ const Detections: React.FC = () => {
     try {
       await detectionAPI.deleteBatch(idsToDelete);
       
-      // Odśwież stronę
       await fetchDetections();
       
-      // Wyczyść zaznaczenie
       setSelectedDetections(new Set());
       setIsSelectAll(false);
       setDeleteDialogOpen(false);
@@ -247,13 +230,10 @@ const Detections: React.FC = () => {
     return 'error';
   };
 
-  // Get image URL
   const getImageUrl = (imagePath: string) => {
-    // Flask serves images from /detections/<filename>
     return `http://localhost:5000/detections/${imagePath}`;
   };
 
-  // Grid View Component
   const GridView_Component = () => (
     <Grid container spacing={3}>
       {detections.map((detection) => (
@@ -281,7 +261,6 @@ const Detections: React.FC = () => {
                   backgroundColor: '#1E293B',
                 }}
                 onError={(e: any) => {
-                  // Fallback to placeholder if image fails to load
                   e.target.src = 'https://via.placeholder.com/300x200?text=No+Image';
                 }}
               />
@@ -396,7 +375,6 @@ const Detections: React.FC = () => {
     </Grid>
   );
 
-  // List View Component
   const columns: GridColDef[] = [
     {
       field: 'image',
@@ -504,7 +482,6 @@ const Detections: React.FC = () => {
     },
   ];
 
-  // Loading state
   if (loading && detections.length === 0) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
@@ -513,7 +490,6 @@ const Detections: React.FC = () => {
     );
   }
 
-  // Error state
   if (error && detections.length === 0) {
     return (
       <Box sx={{ p: 3 }}>
@@ -530,7 +506,6 @@ const Detections: React.FC = () => {
 
   return (
     <Box>
-      {/* Header with Controls */}
       <Paper sx={{ p: 2, mb: 3 }}>
         <Box
           sx={{
@@ -605,7 +580,6 @@ const Detections: React.FC = () => {
         </Box>
       </Paper>
 
-      {/* Content Area */}
       {detections.length === 0 ? (
         <Paper sx={{ p: 6, textAlign: 'center' }}>
           <Typography variant="h6" color="text.secondary" gutterBottom>
@@ -640,7 +614,6 @@ const Detections: React.FC = () => {
         </Paper>
       )}
 
-      {/* Pagination */}
       {totalPages > 0 && (
         <Stack spacing={2} alignItems="center" sx={{ mt: 3, mb: 2 }}>
           <Pagination 
@@ -652,7 +625,6 @@ const Detections: React.FC = () => {
         </Stack>
       )}
 
-      {/* Detail Dialog */}
       <Dialog
         open={openDialog}
         onClose={() => setOpenDialog(false)}
@@ -817,7 +789,6 @@ const Detections: React.FC = () => {
         )}
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
       <Dialog
         open={deleteDialogOpen}
         onClose={() => setDeleteDialogOpen(false)}
@@ -853,7 +824,6 @@ const Detections: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar for notifications */}
       <Snackbar
         open={snackbar.open}
         autoHideDuration={4000}

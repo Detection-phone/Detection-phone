@@ -45,7 +45,6 @@ import {
 import { dashboardAPI, DashboardStats } from '../services/api';
 import { handleDownloadImage } from '../utils/download';
 
-// KPI Card Component
 interface KPICardProps {
   title: string;
   value: string | number;
@@ -139,7 +138,6 @@ const KPICard: React.FC<KPICardProps> = ({ title, value, change, icon, color }) 
 };
 
 const Dashboard: React.FC = () => {
-  // ✅ FIXED: Fetch real data from API
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -161,7 +159,6 @@ const Dashboard: React.FC = () => {
     };
 
     fetchData();
-    // fetch chart data
     const fetchChart = async () => {
       try {
         const res = await fetch('http://localhost:5000/api/stats/detections_over_time');
@@ -173,7 +170,6 @@ const Dashboard: React.FC = () => {
     };
     fetchChart();
     
-    // Refresh data every 30 seconds
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, []);
@@ -194,7 +190,6 @@ const Dashboard: React.FC = () => {
     );
   }
 
-  // Use fetched data or fallback to defaults
   const totalDetections = stats?.total_detections ?? 0;
   const todayDetections = stats?.today_detections ?? 0;
   const cameraStatus = stats?.camera_status ?? 'Offline';
@@ -206,7 +201,6 @@ const Dashboard: React.FC = () => {
   return (
     <Box sx={{ flexGrow: 1 }}>
       <Grid container spacing={3}>
-        {/* KPI Cards */}
         <Grid item xs={12} sm={6} lg={4}>
           <KPICard
             title="Total Detections"
@@ -234,7 +228,6 @@ const Dashboard: React.FC = () => {
           />
         </Grid>
 
-        {/* Detections Over Time Chart */}
         <Grid item xs={12} lg={12}>
           <Paper sx={{ p: 3, height: '480px' }}>
             <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>
@@ -277,7 +270,6 @@ const Dashboard: React.FC = () => {
 
         
 
-        {/* Recent Detections Table */}
         <Grid item xs={12}>
           <Paper sx={{ p: 3 }}>
             <Typography variant="h6" gutterBottom sx={{ fontWeight: 600, mb: 3 }}>

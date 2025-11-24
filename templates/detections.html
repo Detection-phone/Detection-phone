@@ -16,12 +16,9 @@
                 </div>
             </div>
             <div class="card-body">
-                <!-- Grid View -->
                 <div id="gridViewContainer" class="row g-4">
-                    <!-- Detections will be loaded here -->
                 </div>
                 
-                <!-- List View -->
                 <div id="listViewContainer" class="table-responsive d-none">
                     <table class="table table-hover">
                         <thead>
@@ -34,7 +31,6 @@
                             </tr>
                         </thead>
                         <tbody id="detectionsTable">
-                            <!-- Detections will be loaded here -->
                         </tbody>
                     </table>
                 </div>
@@ -43,7 +39,6 @@
     </div>
 </div>
 
-<!-- Image Modal -->
 <div class="modal fade" id="imageModal" tabindex="-1" aria-labelledby="imageModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content bg-dark">
@@ -75,23 +70,19 @@
 
 {% block scripts %}
 <script>
-// Function to format date
 function formatDate(dateString) {
     const date = new Date(dateString);
     return date.toLocaleString();
 }
 
-// Store detections globally for modal access
 let allDetections = [];
 
-// Function to load detections
 async function loadDetections() {
     try {
         const response = await fetch('/api/detections');
         const detections = await response.json();
         allDetections = detections;
         
-        // Update grid view
         const gridContainer = document.getElementById('gridViewContainer');
         gridContainer.innerHTML = '';
         
@@ -114,7 +105,6 @@ async function loadDetections() {
             gridContainer.appendChild(col);
         });
 
-        // Update list view
         const tableBody = document.getElementById('detectionsTable');
         tableBody.innerHTML = '';
         
@@ -138,30 +128,24 @@ async function loadDetections() {
     }
 }
 
-// Function to open modal with detection details
 function openModal(detectionId) {
     const detection = allDetections.find(d => d.id === detectionId);
     if (!detection) return;
     
-    // Update modal content
     document.getElementById('modalImage').src = `/detections/${detection.image_path}`;
     document.getElementById('modalTime').textContent = formatDate(detection.timestamp);
     document.getElementById('modalLocation').textContent = detection.location;
     document.getElementById('modalConfidence').textContent = `${(detection.confidence * 100).toFixed(1)}%`;
     
-    // Update status badge
     const statusSpan = document.getElementById('modalStatus');
     statusSpan.innerHTML = `<span class="badge bg-${detection.status === 'Pending' ? 'warning' : 'success'}">${detection.status}</span>`;
     
-    // Update download button
     document.getElementById('modalDownloadBtn').href = `/detections/${detection.image_path}`;
     
-    // Show modal
     const modal = new bootstrap.Modal(document.getElementById('imageModal'));
     modal.show();
 }
 
-// Legacy function for compatibility
 function viewImage(imagePath) {
     const detection = allDetections.find(d => d.image_path === imagePath);
     if (detection) {
@@ -169,7 +153,6 @@ function viewImage(imagePath) {
     }
 }
 
-// View switching
 document.getElementById('gridView').addEventListener('click', () => {
     document.getElementById('gridViewContainer').classList.remove('d-none');
     document.getElementById('listViewContainer').classList.add('d-none');
@@ -184,10 +167,8 @@ document.getElementById('listView').addEventListener('click', () => {
     document.getElementById('listView').classList.add('active');
 });
 
-// Load detections when page loads
 document.addEventListener('DOMContentLoaded', loadDetections);
 
-// Refresh detections every 30 seconds
 setInterval(loadDetections, 30000);
 </script>
 {% endblock %} 

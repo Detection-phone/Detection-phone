@@ -1,392 +1,339 @@
-# 📋 Instrukcja: Jak zaimplementować model Roboflow do innego projektu
+# Instrukcja Integracji Systemu Wykrywania Smartfonów w Szkole
 
-## 🚀 Krok 1: Instalacja zależności
+Ten dokument opisuje, jak zintegrować system wykrywania smartfonów w środowisku szkolnym. System został zaprojektowany z myślą o szkołach podstawowych, gdzie problem nieodpowiedniego korzystania ze smartfonów podczas zajęć jest szczególnie widoczny.
 
-W swoim nowym projekcie zainstaluj bibliotekę Roboflow:
+## Wymagania Wstępne
+
+Przed rozpoczęciem integracji upewnij się, że masz:
+
+- Komputer z systemem Windows 10 lub nowszym
+- Kamerę internetową (może być wbudowana w laptopa lub zewnętrzna)
+- Dostęp do internetu (wymagany dla Roboflow AI i powiadomień)
+- Python 3.8-3.12 zainstalowany
+- Node.js 14 lub nowszy zainstalowany
+- Konto Gmail (dla powiadomień email, opcjonalne)
+- Konto Cloudinary (dla przechowywania zdjęć w chmurze, opcjonalne)
+
+## Krok 1: Instalacja Systemu
+
+### 1.1 Pobranie Projektu
+
+Sklonuj repozytorium lub pobierz pliki projektu do wybranego katalogu:
 
 ```bash
-pip install roboflow
+cd C:\Users\TwojaNazwa\Desktop
+git clone <repository-url>
+cd Detection-phone
 ```
 
-Lub jeśli masz problemy z uprawnieniami (Windows):
+### 1.2 Instalacja Zależności Backend
+
+Zainstaluj wszystkie wymagane biblioteki Pythona:
+
 ```bash
-pip install --user roboflow
+pip install -r requirements.txt
 ```
 
----
+Jeśli masz problemy z uprawnieniami na Windows:
 
-## 📦 Krok 2: Podstawowa implementacja
-
-### Opcja A: Prosta funkcja (dla szybkiego użycia)
-
-```python
-from roboflow import Roboflow
-import os
-
-def init_roboflow_model(api_key="DAWQI4w1KCHH1MlWH7t4"):
-    """
-    Inicjalizuje model Roboflow do detekcji głów.
-    
-    Args:
-        api_key: Twój klucz API Roboflow
-    
-    Returns:
-        model: Zainicjalizowany model Roboflow
-    """
-    rf = Roboflow(api_key=api_key)
-    
-    try:
-        # Próba bezpośredniego dostępu
-        model = rf.model("heads-detection/1")
-    except:
-        try:
-            # Standardowe podejście
-            workspace = rf.workspace("heads-detection")
-            project = workspace.project("heads-detection")
-            model = project.version(1).model
-        except:
-            # Alternatywne podejście
-            workspace = rf.workspace()
-            project = workspace.project("heads-detection")
-            model = project.version(1).model
-    
-    return model
-
-def detect_heads(image_path, model, confidence=40, overlap=30):
-    """
-    Wykonuje detekcję głów na obrazie.
-    
-    Args:
-        image_path: Ścieżka do obrazu
-        model: Zainicjalizowany model Roboflow
-        confidence: Próg pewności (0-100)
-        overlap: Próg nakładania się (0-100)
-    
-    Returns:
-        dict: Wyniki predykcji w formacie JSON
-    """
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(f"Nie znaleziono pliku: {image_path}")
-    
-    prediction = model.predict(image_path, confidence=confidence, overlap=overlap)
-    return prediction.json()
-
-# Przykład użycia:
-# model = init_roboflow_model()
-# results = detect_heads("sciezka/do/obrazu.jpg", model)
-# print(results)
-```
-
----
-
-### Opcja B: Klasa (dla większych projektów)
-
-```python
-from roboflow import Roboflow
-import os
-from typing import Dict, Optional
-
-class RoboflowHeadDetector:
-    """Klasa do obsługi detekcji głów za pomocą Roboflow."""
-    
-    def __init__(self, api_key: str = "DAWQI4w1KCHH1MlWH7t4"):
-        """
-        Inicjalizuje detektor.
-        
-        Args:
-            api_key: Klucz API Roboflow
-        """
-        self.api_key = api_key
-        self.model = None
-        self._initialize_model()
-    
-    def _initialize_model(self):
-        """Inicjalizuje model Roboflow."""
-        rf = Roboflow(api_key=self.api_key)
-        
-        try:
-            self.model = rf.model("heads-detection/1")
-        except:
-            try:
-                workspace = rf.workspace("heads-detection")
-                project = workspace.project("heads-detection")
-                self.model = project.version(1).model
-            except:
-                workspace = rf.workspace()
-                project = workspace.project("heads-detection")
-                self.model = project.version(1).model
-    
-    def predict(self, image_path: str, confidence: int = 40, overlap: int = 30) -> Dict:
-        """
-        Wykonuje predykcję na obrazie.
-        
-        Args:
-            image_path: Ścieżka do obrazu
-            confidence: Próg pewności (0-100)
-            overlap: Próg nakładania się (0-100)
-        
-        Returns:
-            dict: Wyniki predykcji
-        """
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Nie znaleziono pliku: {image_path}")
-        
-        prediction = self.model.predict(image_path, confidence=confidence, overlap=overlap)
-        return prediction.json()
-    
-    def predict_and_save(self, image_path: str, output_path: str, 
-                        confidence: int = 40, overlap: int = 30) -> Dict:
-        """
-        Wykonuje predykcję i zapisuje wynik z zaznaczonymi detekcjami.
-        
-        Args:
-            image_path: Ścieżka do obrazu wejściowego
-            output_path: Ścieżka do zapisania wyniku
-            confidence: Próg pewności (0-100)
-            overlap: Próg nakładania się (0-100)
-        
-        Returns:
-            dict: Wyniki predykcji
-        """
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Nie znaleziono pliku: {image_path}")
-        
-        prediction = self.model.predict(image_path, confidence=confidence, overlap=overlap)
-        prediction.save(output_path)
-        return prediction.json()
-    
-    def count_detections(self, image_path: str, confidence: int = 40, overlap: int = 30) -> int:
-        """
-        Zwraca liczbę wykrytych obiektów.
-        
-        Args:
-            image_path: Ścieżka do obrazu
-            confidence: Próg pewności (0-100)
-            overlap: Próg nakładania się (0-100)
-        
-        Returns:
-            int: Liczba wykrytych obiektów
-        """
-        results = self.predict(image_path, confidence, overlap)
-        return len(results.get('predictions', []))
-
-# Przykład użycia:
-# detector = RoboflowHeadDetector()
-# results = detector.predict("obraz.jpg")
-# count = detector.count_detections("obraz.jpg")
-# detector.predict_and_save("obraz.jpg", "wynik.jpg")
-```
-
----
-
-### Opcja C: Z użyciem zmiennych środowiskowych (najbezpieczniejsza)
-
-**1. Utwórz plik `.env` w katalogu projektu:**
-```
-ROBOFLOW_API_KEY=DAWQI4w1KCHH1MlWH7t4
-```
-
-**2. Zainstaluj python-dotenv:**
 ```bash
-pip install python-dotenv
+pip install --user -r requirements.txt
 ```
 
-**3. Kod:**
-```python
-from roboflow import Roboflow
-from dotenv import load_dotenv
-import os
+### 1.3 Instalacja Zależności Frontend
 
-# Załaduj zmienne środowiskowe
-load_dotenv()
+Zainstaluj pakiety Node.js:
 
-def get_roboflow_model():
-    """Pobiera model Roboflow używając klucza API z .env"""
-    api_key = os.getenv("ROBOFLOW_API_KEY")
-    if not api_key:
-        raise ValueError("ROBOFLOW_API_KEY nie został znaleziony w zmiennych środowiskowych!")
-    
-    rf = Roboflow(api_key=api_key)
-    
-    try:
-        model = rf.model("heads-detection/1")
-    except:
-        try:
-            workspace = rf.workspace("heads-detection")
-            project = workspace.project("heads-detection")
-            model = project.version(1).model
-        except:
-            workspace = rf.workspace()
-            project = workspace.project("heads-detection")
-            model = project.version(1).model
-    
-    return model
-
-# Użycie:
-# model = get_roboflow_model()
-# prediction = model.predict("obraz.jpg")
+```bash
+npm install
 ```
 
----
+## Krok 2: Konfiguracja Zmiennych Środowiskowych
 
-## 🔧 Krok 3: Integracja z istniejącym kodem
+Utwórz plik `.env` w głównym katalogu projektu. Ten plik zawiera wrażliwe dane, więc nie commituj go do repozytorium.
 
-### Przykład 1: Integracja z Flask (API webowe)
+### 2.1 Konfiguracja Email (Opcjonalne)
 
-```python
-from flask import Flask, request, jsonify
-from roboflow import Roboflow
-import os
+Jeśli chcesz otrzymywać powiadomienia email:
 
-app = Flask(__name__)
-
-# Inicjalizuj model przy starcie aplikacji
-rf = Roboflow(api_key="DAWQI4w1KCHH1MlWH7t4")
-try:
-    model = rf.model("heads-detection/1")
-except:
-    workspace = rf.workspace()
-    project = workspace.project("heads-detection")
-    model = project.version(1).model
-
-@app.route('/detect', methods=['POST'])
-def detect():
-    """Endpoint do detekcji głów na przesłanym obrazie."""
-    if 'image' not in request.files:
-        return jsonify({'error': 'Brak obrazu'}), 400
-    
-    file = request.files['image']
-    file_path = f"temp_{file.filename}"
-    file.save(file_path)
-    
-    try:
-        prediction = model.predict(file_path, confidence=40, overlap=30)
-        results = prediction.json()
-        return jsonify(results)
-    finally:
-        os.remove(file_path)  # Usuń tymczasowy plik
-
-if __name__ == '__main__':
-    app.run(debug=True)
+```env
+GMAIL_USER=twoj_email@gmail.com
+GMAIL_APP_PASSWORD=twoje_16_znakowe_haslo_aplikacji
+EMAIL_RECIPIENT=nauczyciel@szkola.pl
 ```
 
----
+Jak uzyskać Hasło Aplikacji Gmail:
+1. Zaloguj się do konta Google
+2. Przejdź do Ustawienia konta → Zabezpieczenia
+3. Włącz weryfikację dwuetapową (jeśli nie jest włączona)
+4. Przejdź do "Hasła aplikacji"
+5. Wygeneruj nowe hasło dla aplikacji
+6. Skopiuj 16-znakowe hasło (bez spacji)
 
-### Przykład 2: Integracja z przetwarzaniem wielu obrazów
+### 2.2 Konfiguracja Cloudinary (Opcjonalne)
 
-```python
-from roboflow import Roboflow
-import os
-from pathlib import Path
+Cloudinary służy do przechowywania zdjęć w chmurze. Jeśli nie chcesz używać chmury, system będzie przechowywał zdjęcia lokalnie.
 
-def process_folder(folder_path, output_folder, model, confidence=40):
-    """
-    Przetwarza wszystkie obrazy w folderze.
-    
-    Args:
-        folder_path: Ścieżka do folderu z obrazami
-        output_folder: Folder na wyniki
-        model: Model Roboflow
-        confidence: Próg pewności
-    """
-    folder = Path(folder_path)
-    output = Path(output_folder)
-    output.mkdir(exist_ok=True)
-    
-    image_extensions = ['.jpg', '.jpeg', '.png', '.bmp']
-    
-    for image_file in folder.iterdir():
-        if image_file.suffix.lower() in image_extensions:
-            print(f"Przetwarzanie: {image_file.name}")
-            
-            prediction = model.predict(str(image_file), confidence=confidence, overlap=30)
-            output_path = output / f"result_{image_file.name}"
-            prediction.save(str(output_path))
-            
-            results = prediction.json()
-            print(f"  Wykryto {len(results['predictions'])} obiektów")
-
-# Użycie:
-# model = init_roboflow_model()  # z Opcji A
-# process_folder("obrazy/", "wyniki/", model)
+```env
+CLOUDINARY_CLOUD_NAME=twoja_nazwa_chmury
+CLOUDINARY_API_KEY=twoj_klucz_api
+CLOUDINARY_API_SECRET=twoj_sekret_api
 ```
 
----
+Jak uzyskać dane Cloudinary:
+1. Zarejestruj się na cloudinary.com
+2. Przejdź do Dashboard
+3. Skopiuj Cloud Name, API Key i API Secret
 
-## 📝 Krok 4: Ważne informacje
+### 2.3 Konfiguracja SMS (Opcjonalne)
 
-### Parametry predykcji:
-- **confidence** (0-100): Minimalna pewność detekcji. Wyższa wartość = mniej fałszywych alarmów, ale może przegapić słabe detekcje
-- **overlap** (0-100): Maksymalne nakładanie się detekcji. Niższa wartość = mniej duplikatów
+Jeśli chcesz otrzymywać powiadomienia SMS:
 
-### Format wyniku:
-```python
-{
-    'predictions': [
-        {
-            'x': 609,              # Pozycja X środka
-            'y': 236,              # Pozycja Y środka
-            'width': 318,          # Szerokość bounding box
-            'height': 448,         # Wysokość bounding box
-            'confidence': 0.83,    # Pewność (0-1)
-            'class': 'person',     # Klasa obiektu
-            'class_id': 0          # ID klasy
-        }
-    ],
-    'image': {
-        'width': '1280',
-        'height': '720'
-    }
-}
+```env
+VONAGE_API_KEY=twoj_klucz_vonage
+VONAGE_API_SECRET=twoj_sekret_vonage
+VONAGE_FROM_NUMBER=PhoneDetection
+VONAGE_TO_NUMBER=48123456789
 ```
 
-### Bezpieczeństwo:
-- ⚠️ **NIGDY** nie commituj klucza API do repozytorium Git!
-- Używaj zmiennych środowiskowych (`.env`) lub plików konfiguracyjnych
-- Dodaj `.env` do `.gitignore`
+Jak uzyskać dane Vonage:
+1. Zarejestruj się na vonage.com
+2. Przejdź do Dashboard
+3. Skopiuj API Key i API Secret
+4. Wpisz numer telefonu w formacie międzynarodowym (bez +)
 
----
+## Krok 3: Inicjalizacja Bazy Danych
 
-## 🎯 Szybki start (kopiuj-wklej)
+Przed pierwszym uruchomieniem musisz zainicjalizować bazę danych:
 
-```python
-from roboflow import Roboflow
-import os
-
-# 1. Inicjalizacja
-rf = Roboflow(api_key="TWÓJ_KLUCZ_API")
-workspace = rf.workspace()
-project = workspace.project("heads-detection")
-model = project.version(1).model
-
-# 2. Predykcja
-prediction = model.predict("obraz.jpg", confidence=40, overlap=30)
-
-# 3. Wyniki
-results = prediction.json()
-print(f"Wykryto {len(results['predictions'])} obiektów")
-
-# 4. Zapis z zaznaczeniami
-prediction.save("wynik.jpg")
+```bash
+python init_db.py
 ```
 
----
+To utworzy plik `instance/admin.db` z domyślnym kontem administratora:
+- Nazwa użytkownika: `admin`
+- Hasło: `admin`
 
-## ❓ Rozwiązywanie problemów
+WAŻNE: Zmień hasło administratora po pierwszym logowaniu!
 
-**Problem:** `AttributeError: 'Roboflow' object has no attribute 'universe'`
-- **Rozwiązanie:** Użyj `workspace()` zamiast `universe()`
+## Krok 4: Uruchomienie Systemu
 
-**Problem:** `FileNotFoundError`
-- **Rozwiązanie:** Sprawdź czy ścieżka do obrazu jest poprawna (używaj `/` lub `os.path.join()`)
+System składa się z dwóch części - backendu (Flask) i frontendu (React). Musisz uruchomić oba w osobnych terminalach.
 
-**Problem:** Model nie ładuje się
-- **Rozwiązanie:** Sprawdź czy klucz API jest poprawny i czy masz dostęp do modelu
+### 4.1 Terminal 1 - Backend (Flask)
 
----
+```bash
+cd Detection-phone
+flask run --debug --no-reload
+```
 
-## 📚 Dodatkowe zasoby
+Backend będzie działał na `http://localhost:5000`
 
-- Dokumentacja Roboflow: https://docs.roboflow.com/
-- Python SDK: https://github.com/roboflow/roboflow-python
+### 4.2 Terminal 2 - Frontend (React)
 
+```bash
+cd Detection-phone
+npm start
+```
+
+Frontend będzie działał na `http://localhost:3000` i automatycznie otworzy się w przeglądarce.
+
+## Krok 5: Konfiguracja Systemu dla Środowiska Szkolnego
+
+### 5.1 Logowanie
+
+1. Otwórz przeglądarkę i przejdź do `http://localhost:3000`
+2. Zaloguj się używając domyślnych danych:
+   - Nazwa użytkownika: `admin`
+   - Hasło: `admin`
+3. ZMIEŃ HASŁO w ustawieniach po pierwszym logowaniu!
+
+### 5.2 Konfiguracja Harmonogramu Kamery
+
+Harmonogram pozwala automatycznie włączać i wyłączać kamerę zgodnie z planem lekcji.
+
+1. Przejdź do Ustawienia → Harmonogram Kamery
+2. Dla każdego dnia tygodnia ustaw:
+   - Czas rozpoczęcia - kiedy kamera ma się włączyć (np. 8:00)
+   - Czas zakończenia - kiedy kamera ma się wyłączyć (np. 14:00)
+3. Możesz ustawić różne godziny dla różnych dni (np. w piątek lekcje kończą się wcześniej)
+
+Przykład dla typowej szkoły podstawowej:
+- Poniedziałek - Piątek: 8:00 - 14:00
+- Sobota - Niedziela: wyłączone
+
+### 5.3 Konfiguracja Stref ROI (Region of Interest)
+
+Strefy ROI pozwalają definiować konkretne miejsca w klasie, gdzie powinna występować detekcja telefonów. To jest szczególnie przydatne w szkołach, gdzie chcemy monitorować konkretne ławki.
+
+Krok po kroku:
+
+1. Załaduj Zdjęcie Konfiguracyjne:
+   - Przejdź do Ustawienia → Strefy ROI
+   - Kliknij przycisk "Załaduj Zdjęcie Konfiguracyjne"
+   - System przechwytuje aktualny widok kamery jako tło
+
+2. Użyj Generatora Siatki (Zalecane dla Klas):
+   - Narysuj jeden duży prostokąt pokrywający wszystkie miejsca w klasie
+   - Ustaw Wiersze (np. 4) i Kolumny (np. 5)
+   - Wybierz tryb nazewnictwa:
+     - Sekwencyjne: "Ławka 1", "Ławka 2", ..., "Ławka 20"
+     - Siatka: "R1-M1", "R1-M2", ..., "R4-M5"
+   - Opcjonalnie: Dodaj prefiks (np. "Ławka")
+   - Kliknij "Wygeneruj Siatkę" → Tworzy 20 stref automatycznie!
+
+3. Dostosuj Strefy:
+   - Przenieś: Kliknij i przeciągnij strefę
+   - Zmień rozmiar: Przeciągnij uchwyty narożników
+   - Zmień nazwę: Kliknij ikonę edycji
+   - Usuń: Kliknij ikonę usuwania
+
+4. Auto-Zapis:
+   - Strefy automatycznie zapisują się 2 sekundy po zmianach
+   - Zielone powiadomienie potwierdza zapis
+
+Przykładowa Konfiguracja dla Klas:
+
+Dla klasy z 4 rzędami po 5 ławek (20 miejsc):
+
+```
+Ustawienia Generatora Siatki:
+- Wiersze: 4
+- Kolumny: 5
+- Tryb Nazewnictwa: Sekwencyjne
+- Prefiks: "Ławka"
+
+Wynik: 20 stref z niezależnym wyciszaniem!
+```
+
+### 5.4 Konfiguracja Powiadomień
+
+Email:
+1. Przejdź do Ustawienia → Powiadomienia
+2. Włącz Email Notifications
+3. Upewnij się, że w pliku `.env` są poprawne dane Gmail
+
+SMS:
+1. Przejdź do Ustawienia → Powiadomienia
+2. Włącz SMS Notifications
+3. Upewnij się, że w pliku `.env` są poprawne dane Vonage
+
+### 5.5 Konfiguracja Progu Pewności
+
+Próg pewności kontroluje, jak czuły jest system na wykrywanie telefonów.
+
+- Niższe wartości (0.1-0.2): Więcej detekcji, ale możliwe fałszywe alarmy
+- Wyższe wartości (0.3-0.5): Mniej detekcji, ale bardziej pewne
+
+Zalecane ustawienie dla szkół: 0.2-0.3
+
+1. Przejdź do Ustawienia → Detection Settings
+2. Dostosuj suwak Confidence Threshold
+3. Wyższe wartości = mniej fałszywych alarmów
+
+### 5.6 Konfiguracja Anonimizacji
+
+System automatycznie zamazuje głowy uczniów na zdjęciach przed zapisaniem do bazy danych. To jest ważne dla ochrony prywatności.
+
+1. Przejdź do Ustawienia → Privacy Settings
+2. Upewnij się, że Blur Faces in Images jest włączone
+3. System używa Roboflow AI do wykrywania głów (dokładność 90%+)
+
+## Krok 6: Testowanie Systemu
+
+### 6.1 Test Kamery
+
+1. Przejdź do Dashboard
+2. Sprawdź status kamery - powinien być "Online" jeśli harmonogram jest aktywny
+3. Jeśli kamera nie startuje, sprawdź:
+   - Czy harmonogram jest ustawiony poprawnie
+   - Czy żadna inna aplikacja nie używa kamery
+   - Czy kamera jest podłączona i działa
+
+### 6.2 Test Detekcji
+
+1. Włącz kamerę ręcznie (jeśli harmonogram nie jest aktywny)
+2. Pokaż telefon przed kamerą
+3. System powinien wykryć telefon i zapisać zdjęcie
+4. Sprawdź Detections - powinieneś zobaczyć nowe wykrycie
+5. Otwórz zdjęcie - głowy powinny być zamazane
+
+### 6.3 Test Powiadomień
+
+1. Włącz powiadomienia (Email lub SMS)
+2. Wykryj telefon przed kamerą
+3. Sprawdź, czy otrzymałeś powiadomienie
+
+## Krok 7: Uruchomienie Produkcyjne
+
+### 7.1 Uruchamianie przy Starcie Systemu
+
+Aby system uruchamiał się automatycznie przy starcie komputera:
+
+Windows (Task Scheduler):
+1. Otwórz Task Scheduler
+2. Utwórz nowe zadanie
+3. Ustaw trigger: "At startup"
+4. Ustaw akcję: uruchom `start_backend.bat` i `start_frontend.bat`
+
+Lub użyj PM2 (dla Node.js):
+```bash
+npm install -g pm2
+pm2 start npm --name "phone-detection-frontend" -- start
+pm2 startup
+pm2 save
+```
+
+### 7.2 Bezpieczeństwo
+
+- Zmień domyślne hasło administratora
+- Używaj HTTPS w produkcji (certyfikat SSL)
+- Regularnie aktualizuj zależności
+- Twórz kopie zapasowe bazy danych
+
+### 7.3 Monitoring
+
+- Sprawdzaj regularnie logi systemu
+- Monitoruj zużycie dysku (zdjęcia mogą zajmować dużo miejsca)
+- Sprawdzaj status kamery w Dashboard
+
+## Rozwiązywanie Problemów
+
+### Kamera nie startuje
+- Sprawdź uprawnienia kamery w ustawieniach Windows
+- Zweryfikuj, czy harmonogram kamery jest ustawiony poprawnie
+- Upewnij się, że żadna inna aplikacja nie używa kamery (zamknij Zoom, Teams, OBS, itp.)
+- Spróbuj zrestartować serwer Flask
+
+### Głowy nie są zamazywane
+- System używa Roboflow AI do wykrywania głów (dokładność 90%+)
+- Sprawdź, czy anonimizacja głów jest włączona w Ustawieniach
+- Zweryfikuj połączenie internetowe (Roboflow wymaga dostępu do API)
+- Sprawdź logi konsoli pod kątem błędów API Roboflow
+
+### Zbyt wiele fałszywych detekcji telefonów
+- Zwiększ próg pewności detekcji telefonów w Ustawieniach (domyślnie: 0.2)
+- Wyższe wartości = mniej fałszywych alarmów (spróbuj 0.3-0.5)
+- Zdefiniuj strefy ROI, aby ograniczyć detekcję do konkretnych obszarów w klasie
+
+### Powiadomienia nie działają
+- Email: Zweryfikuj, czy Hasło Aplikacji Gmail jest poprawne (16 znaków, bez spacji)
+- SMS: Sprawdź dane uwierzytelniające API Vonage i format numeru telefonu
+- Cloudinary: Zweryfikuj nazwę chmury, klucz API i sekret API
+- Sprawdź logi konsoli pod kątem szczegółowych komunikatów o błędach
+
+## Wsparcie
+
+Jeśli napotkasz problemy podczas integracji, sprawdź:
+- Logi konsoli (backend i frontend)
+- Plik `instance/admin.db` (baza danych)
+- Folder `detections/` (zapisane zdjęcia)
+
+## Podsumowanie
+
+Po wykonaniu wszystkich kroków system powinien być gotowy do użycia w środowisku szkolnym. Pamiętaj o:
+- Regularnym sprawdzaniu statusu systemu
+- Tworzeniu kopii zapasowych bazy danych
+- Monitorowaniu zużycia dysku
+- Aktualizacji hasła administratora
+- Informowaniu uczniów o monitorowaniu (zgodnie z przepisami RODO)
